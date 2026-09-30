@@ -110,7 +110,7 @@ func (s sym) Symbolicate(target uint32, addr uint64) sampler.Symbol {
 	return sampler.Symbol{Found: true, Name: name, Module: mod, ModulePath: path, File: "/src/" + name + ".c", Line: 7, Start: start, Len: 0x100}
 }
 
-func (sym) ThreadName(pid int, tid uint64) string { return "" }
+func (sym) ThreadName(target uint32, tid uint64) string { return "" }
 
 const (
 	fMain   = 0x1000

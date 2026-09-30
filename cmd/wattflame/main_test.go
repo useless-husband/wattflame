@@ -30,7 +30,7 @@ func (fakeSym) Symbolicate(target uint32, addr uint64) sampler.Symbol {
 	}
 	return sampler.Symbol{}
 }
-func (fakeSym) ThreadName(pid int, tid uint64) string { return "" }
+func (fakeSym) ThreadName(target uint32, tid uint64) string { return "" }
 
 func writeProfile(t *testing.T, name string, encode, checksum uint64) string {
 	t.Helper()

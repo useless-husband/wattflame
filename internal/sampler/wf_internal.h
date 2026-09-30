@@ -28,6 +28,8 @@ typedef struct {
 	uint32_t deferred;                         // ticks acc has waited for a stack
 	int had_energy;                            // some energy has been attributed to it
 	int gone;                                  // seen to have exited; awaiting removal
+	uint32_t name_age;                         // ticks since the name was last looked up
+	char name[64];                             // what the thread calls itself, once known
 	uint32_t npend;                            // stacks waiting for their share
 	uint64_t *pend;
 	size_t pend_len;
@@ -49,6 +51,12 @@ typedef struct {
 	uint64_t penergy;
 } wf_carry;
 
+// The name of a thread that has ended, kept so it can still be shown.
+typedef struct {
+	uint64_t tid;
+	char name[64];
+} wf_name;
+
 typedef struct {
 	uint32_t index;
 	pid_t pid;
@@ -61,6 +69,9 @@ typedef struct {
 	wf_thread *th;
 	int nth;
 	int capth;
+	wf_name *names;
+	int nnames;
+	int capnames;
 	mach_port_t pending_reply;
 	// Process totals from the kernel (ri_energy_nj and its performance-core
 	// part), at the start and at the latest reading, and what the per-thread

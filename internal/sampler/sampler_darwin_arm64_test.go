@@ -82,7 +82,7 @@ func record(t *testing.T, timeout time.Duration, args ...string) result {
 			res.cpu += r.W[sampler.WCPUNs][l]
 		}
 		res.energy += e
-		if name := sess.ThreadName(r.PID, r.TID); name != "" {
+		if name := sess.ThreadName(r.Target, r.TID); name != "" {
 			res.threadNames[name] = true
 		}
 		if len(r.Frames) == 0 {

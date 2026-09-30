@@ -267,10 +267,11 @@ func (s *Session) Symbolicate(target uint32, addr uint64) Symbol {
 	}
 }
 
-// ThreadName returns the name a thread gave itself, or "".
-func (s *Session) ThreadName(pid int, tid uint64) string {
+// ThreadName returns the name a thread of a target gave itself, or "". It
+// still answers after the thread has ended.
+func (s *Session) ThreadName(target uint32, tid uint64) string {
 	var buf [128]C.char
-	C.wf_thread_name(C.int32_t(pid), C.uint64_t(tid), &buf[0], C.size_t(len(buf)))
+	C.wf_thread_name(s.s, C.uint32_t(target), C.uint64_t(tid), &buf[0], C.size_t(len(buf)))
 	return C.GoString(&buf[0])
 }
 
