@@ -32,6 +32,8 @@ func (s *Session) Start(interval time.Duration, maxDepth int) error { return err
 func (s *Session) Stop()                                            {}
 func (s *Session) Drain(fn func(*Record)) int                       { return 0 }
 func (s *Session) RootExited() (bool, ExitStatus)                   { return true, ExitStatus{} }
+func (s *Session) RootTreeCPU() time.Duration                       { return 0 }
+func (s *Session) Reap()                                            {}
 func (s *Session) RootPID() int                                     { return 0 }
 func (s *Session) Signal(sig os.Signal)                             {}
 func (s *Session) Stats() Stats                                     { return Stats{} }

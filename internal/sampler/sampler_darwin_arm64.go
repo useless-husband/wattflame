@@ -181,6 +181,19 @@ func (s *Session) RootExited() (bool, ExitStatus) {
 	return exited, ExitStatus{Code: ws.ExitStatus()}
 }
 
+// RootTreeCPU is the CPU time of the launched program and of every descendant
+// it had waited for when it exited, as reported by the kernel on wait. Zero
+// until then, and in attach mode.
+func (s *Session) RootTreeCPU() time.Duration {
+	return time.Duration(C.wf_root_tree_cpu_ns(s.s))
+}
+
+// Reap frees the symbol tables of processes that ended a few calls ago. Call
+// it after a Drain whose addresses have all been symbolicated.
+func (s *Session) Reap() {
+	C.wf_reap(s.s)
+}
+
 // RootPID is the pid of the launched or attached process.
 func (s *Session) RootPID() int {
 	return int(C.wf_root_pid(s.s))
@@ -208,6 +221,7 @@ func (s *Session) Stats() Stats {
 		SelfCPUNs:    uint64(st.self_cpu_ns),
 		ElapsedNs:    uint64(st.elapsed_ns),
 		Dropped:      uint64(st.dropped),
+		TargetsLost:  uint64(st.targets_lost),
 		Targets:      int(st.targets),
 		Levels:       int(st.nlevels),
 	}

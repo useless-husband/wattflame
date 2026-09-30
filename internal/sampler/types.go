@@ -22,6 +22,9 @@ const (
 	FlagOffCPU    = 1 << 1 // thread was not runnable when the stack was taken
 	FlagNoStack   = 1 << 2 // weights with no stack to attach them to
 	FlagOpaque    = 1 << 3 // from a process that is counted but cannot be sampled
+	FlagStartup   = 1 << 4 // used by a process before it could be sampled
+	FlagResidual  = 1 << 5 // billed to the process but read from no thread
+	FlagTopUp     = 1 << 6 // more weight for a stack that was already counted
 )
 
 // Record is one stack sample together with the energy, CPU time, cycles and
@@ -62,6 +65,7 @@ type Stats struct {
 	SelfCPUNs    uint64
 	ElapsedNs    uint64
 	Dropped      uint64
+	TargetsLost  uint64 // processes that could not be tracked
 	Targets      int
 	Levels       int
 }

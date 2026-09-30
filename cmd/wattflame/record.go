@@ -52,6 +52,13 @@ func cmdRecord(args []string, stdout, stderr io.Writer) int {
 		htmlOut = htmlPathFor(output)
 	}
 
+	// Signals are caught before anything is started: from here on wattflame
+	// must not die in a way that leaves the program it launched behind.
+	// SIGQUIT is included because Go's default for it is to exit on the spot.
+	sigc := make(chan os.Signal, 8)
+	signal.Notify(sigc, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT)
+	defer signal.Stop(sigc)
+
 	var sess *sampler.Session
 	var err error
 	launched := "" // resolved path of the program, in launch mode
@@ -89,10 +96,6 @@ func cmdRecord(args []string, stdout, stderr io.Writer) int {
 	}
 	syncTargets()
 
-	sigc := make(chan os.Signal, 4)
-	signal.Notify(sigc, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
-	defer signal.Stop(sigc)
-
 	started := time.Now()
 	interval := time.Second / time.Duration(hz)
 	if err := sess.Start(interval, depth); err != nil {
@@ -123,6 +126,7 @@ loop:
 		case <-ticker.C:
 			syncTargets()
 			sess.Drain(b.Add)
+			sess.Reap()
 			if exited, _ := sess.RootExited(); exited {
 				break loop
 			}
@@ -132,10 +136,11 @@ loop:
 				stopped = "recording interrupted"
 				break loop
 			}
-			// A launched program shares our terminal, so Ctrl-C has reached
-			// it already. Other signals were sent to wattflame alone; pass
-			// them on. Either way keep recording until it exits.
-			if sig != syscall.SIGINT {
+			// Ctrl-C at a terminal goes to the whole foreground process
+			// group, so the program has had it already. Anything else was
+			// sent to wattflame alone; pass it on. Either way keep recording
+			// until the program exits.
+			if sig != syscall.SIGINT || !inForeground() {
 				sess.Signal(sig)
 			}
 			if !quiet {
@@ -158,6 +163,7 @@ loop:
 		Tool:       "wattflame " + version,
 		Command:    command,
 		PID:        sess.RootPID(),
+		TreeCPUNs:  uint64(sess.RootTreeCPU()),
 		Attached:   pid != 0,
 		Started:    started,
 		DurationNs: stats.ElapsedNs,
@@ -173,6 +179,7 @@ loop:
 			SelfEnergyNJ: stats.SelfEnergyNJ,
 			SelfCPUNs:    stats.SelfCPUNs,
 			Dropped:      stats.Dropped,
+			TargetsLost:  stats.TargetsLost,
 		},
 	}
 	exitCode := 0

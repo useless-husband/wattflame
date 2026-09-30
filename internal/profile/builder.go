@@ -28,6 +28,10 @@ const (
 	// The part of a sampled process that ran before it could be sampled:
 	// the dynamic loader mapping libraries, up to the handshake.
 	startupFrameName = "[process startup]"
+	// Energy the kernel billed to a process that no thread reading accounts
+	// for: the last moments of threads, and of the process, that ended
+	// between two readings.
+	tailFrameName = "[unsampled tail]"
 )
 
 const (
@@ -238,21 +242,37 @@ func (b *Builder) threadNodeFor(r *sampler.Record) int32 {
 // Add folds one record into the tree.
 func (b *Builder) Add(r *sampler.Record) {
 	b.records++
-	node := b.threadNodeFor(r)
+	var node int32
+	// Residual energy is what the kernel billed a process beyond what its
+	// threads' counters showed. It arrives either on the stack of a thread
+	// that ended before its energy was readable, or, when there is no such
+	// stack, for the process as a whole.
+	residual := r.Flags&sampler.FlagResidual != 0
+	if residual && len(r.Frames) == 0 {
+		node = b.processNode(r)
+	} else {
+		node = b.threadNodeFor(r)
+	}
 	var energy uint64
 	for l := 0; l < MaxLevels; l++ {
 		energy += r.W[sampler.WEnergyNJ][l]
 	}
 
 	var leaf resolved
-	if len(r.Frames) == 0 || r.Flags&sampler.FlagNoStack != 0 {
+	switch {
+	case residual && len(r.Frames) == 0:
+		node = b.child(node, b.frame(frameKey{name: tailFrameName}, Frame{Name: tailFrameName}))
+	case r.Flags&sampler.FlagStartup != 0:
+		node = b.child(node, b.frame(frameKey{name: startupFrameName},
+			Frame{Name: startupFrameName, Origin: OriginSystem}))
+	case len(r.Frames) == 0 || r.Flags&sampler.FlagNoStack != 0:
 		f := b.frame(frameKey{name: noStackFrameName}, Frame{Name: noStackFrameName})
 		before := len(b.nodes)
 		node = b.child(node, f)
 		if r.Flags&sampler.FlagOpaque != 0 && len(b.nodes) > before {
 			b.unsampled[r.Target] = append(b.unsampled[r.Target], node)
 		}
-	} else {
+	default:
 		b.sampled[r.Target] = true
 		// Frames arrive leaf first. Return addresses point at the
 		// instruction after the call, which can already belong to the next
@@ -273,7 +293,9 @@ func (b *Builder) Add(r *sampler.Record) {
 	}
 
 	self := &b.nodes[node].Self
-	self.Samples++
+	if r.Flags&sampler.FlagTopUp == 0 {
+		self.Samples++
+	}
 	for l := 0; l < MaxLevels; l++ {
 		self.EnergyNJ[l] += r.W[sampler.WEnergyNJ][l]
 		self.CPUNs[l] += r.W[sampler.WCPUNs][l]

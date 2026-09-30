@@ -220,21 +220,27 @@ type SamplerStats struct {
 	SelfEnergyNJ uint64 `json:"selfEnergyNJ"`
 	SelfCPUNs    uint64 `json:"selfCPUNs"`
 	Dropped      uint64 `json:"dropped,omitempty"`
+	TargetsLost  uint64 `json:"targetsLost,omitempty"`
 }
 
 // Meta describes how and where a profile was recorded.
 type Meta struct {
-	Tool       string       `json:"tool"`
-	Command    []string     `json:"command,omitempty"`
-	PID        int          `json:"pid"`
-	Attached   bool         `json:"attached,omitempty"`
-	Started    time.Time    `json:"started"`
-	DurationNs uint64       `json:"durationNs"`
-	IntervalUs int          `json:"intervalUs"`
-	Exit       string       `json:"exit,omitempty"`
-	Machine    Machine      `json:"machine"`
-	Processes  []Process    `json:"processes"`
-	Sampler    SamplerStats `json:"sampler"`
+	Tool       string    `json:"tool"`
+	Command    []string  `json:"command,omitempty"`
+	PID        int       `json:"pid"`
+	Attached   bool      `json:"attached,omitempty"`
+	Started    time.Time `json:"started"`
+	DurationNs uint64    `json:"durationNs"`
+	IntervalUs int       `json:"intervalUs"`
+	Exit       string    `json:"exit,omitempty"`
+	// TreeCPUNs is the CPU time the kernel reported, when the launched
+	// program was waited for, for it and all the descendants it had reaped.
+	// Set against the CPU time in the profile it shows how much of the
+	// process tree the recording saw. Zero when unknown.
+	TreeCPUNs uint64       `json:"treeCPUNs,omitempty"`
+	Machine   Machine      `json:"machine"`
+	Processes []Process    `json:"processes"`
+	Sampler   SamplerStats `json:"sampler"`
 }
 
 // Timeline is energy over time in fixed-width buckets.

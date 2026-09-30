@@ -20,9 +20,11 @@ func Title(p *profile.Profile) string {
 	return fmt.Sprintf("pid %d", p.Meta.PID)
 }
 
-// Coverage compares the kernel's per-process energy totals with what the
-// per-thread counters added up to at the same moments. kernel is 0 when the
-// recording did not capture it.
+// Coverage returns the kernel's per-process energy totals for the tracked
+// processes, and how much of that the per-thread counters showed directly.
+// The profile's own total can be set against kernel; what the threads did not
+// show was taken from the process totals. kernel is 0 when the recording did
+// not capture it.
 func Coverage(p *profile.Profile) (threads, kernel uint64) {
 	for _, pr := range p.Meta.Processes {
 		kernel += pr.KernelEnergyNJ
@@ -81,7 +83,22 @@ func Summary(w io.Writer, p *profile.Profile, top int) error {
 		fmt.Fprintf(w, "  Cores      %s\n", strings.Join(parts, " · "))
 	}
 	if th, k := Coverage(p); k > 0 {
-		fmt.Fprintf(w, "  Accounted  %s of what the kernel billed to the process\n", Percent(th, k))
+		what := "the process"
+		if len(p.Meta.Processes) > 1 {
+			what = fmt.Sprintf("the %d processes it tracked", len(p.Meta.Processes))
+		}
+		line := fmt.Sprintf("  Accounted  %s of what the kernel billed to %s", Percent(energy, k), what)
+		if th < k*99/100 {
+			// Threads that end between two readings take their last
+			// moments with them; that part comes from the process total.
+			line += fmt.Sprintf(" (%s read thread by thread)", Percent(th, k))
+		}
+		fmt.Fprintln(w, line)
+	}
+	if tree := p.Meta.TreeCPUNs; tree > 0 && (len(p.Meta.Processes) > 1 || cpu < tree*99/100) {
+		// Processes too short-lived to be noticed, and ones owned by another
+		// user, are in the kernel's figure for the whole tree but not here.
+		fmt.Fprintf(w, "  Seen       %s of the %s of CPU time the command and its children used\n", Percent(cpu, tree), Duration(tree))
 	}
 	if s := p.Meta.Sampler; s.Ticks > 0 {
 		hz := 0
@@ -98,13 +115,16 @@ func Summary(w io.Writer, p *profile.Profile, top int) error {
 		if s.Dropped > 0 {
 			line += fmt.Sprintf(", %d records dropped", s.Dropped)
 		}
+		if s.TargetsLost > 0 {
+			line += fmt.Sprintf(", %d processes not tracked (out of memory)", s.TargetsLost)
+		}
 		fmt.Fprintln(w, line)
 	}
 	fmt.Fprintln(w)
 
 	if energy == 0 {
 		fmt.Fprintln(w, "  No energy was recorded. The program may have exited before the first sample,")
-		fmt.Fprintln(w, "  or this machine does not report per-thread energy (virtual machines do not).")
+		fmt.Fprintln(w, "  or the kernel on this machine does not report per-thread energy.")
 		fmt.Fprintln(w)
 		return nil
 	}

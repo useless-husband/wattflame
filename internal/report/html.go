@@ -4,6 +4,7 @@ import (
 	"bytes"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"html"
 	"io"
 	"os"
@@ -28,19 +29,25 @@ func HTML(w io.Writer, p *profile.Profile) error {
 	if err != nil {
 		return err
 	}
-	page := bytes.Replace(viewer, titleMark, []byte(html.EscapeString(truncate(Title(p), 80))), 1)
-	i := bytes.Index(page, profileMark)
-	if i < 0 {
-		return io.ErrUnexpectedEOF
+	// Both markers are located in the template itself, before anything is
+	// substituted, so text from the profile can never be mistaken for one.
+	ti := bytes.Index(viewer, titleMark)
+	pi := bytes.Index(viewer, profileMark)
+	if ti < 0 || pi < ti {
+		return errors.New("viewer template is missing its markers")
 	}
-	if _, err := w.Write(page[:i]); err != nil {
-		return err
+	for _, part := range [][]byte{
+		viewer[:ti],
+		[]byte(html.EscapeString(truncate(Title(p), 80))),
+		viewer[ti+len(titleMark) : pi],
+		data,
+		viewer[pi+len(profileMark):],
+	} {
+		if _, err := w.Write(part); err != nil {
+			return err
+		}
 	}
-	if _, err := w.Write(data); err != nil {
-		return err
-	}
-	_, err = w.Write(page[i+len(profileMark):])
-	return err
+	return nil
 }
 
 // SaveHTML writes the page to a file.
