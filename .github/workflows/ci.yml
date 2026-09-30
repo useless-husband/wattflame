@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    name: build and test (macOS, Apple Silicon)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: build
+        run: make build
+      - name: vet
+        run: go vet ./...
+      - name: test
+        # Hosted runners are virtual machines and report no per-thread
+        # energy. The sampler tests still check stacks, symbols, CPU time and
+        # process tracking there, and skip the energy assertions with a note.
+        run: go test -race -count=1 -v ./...
+      - name: examples
+        run: make -C examples
+      - name: smoke test
+        run: |
+          ./wattflame version
+          ./wattflame record -o smoke.json -- examples/bin/cores 1
+          ./wattflame report smoke.json
+          ./wattflame report -folded - smoke.json | grep -q crunch
+          ./wattflame diff smoke.json smoke.json
+          test -s smoke.html
+
+  portable:
+    name: report and diff on Linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - run: go vet ./...
+      - run: go test -race -count=1 ./...
+      - name: recording is refused with an explanation
+        run: |
+          go build -o wattflame ./cmd/wattflame
+          ./wattflame version
+          if ./wattflame record -- true 2> err.txt; then exit 1; fi
+          grep -q "Apple Silicon" err.txt
+
+  lint:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - run: make lint
+      - name: go mod tidy
+        run: go mod tidy && git diff --exit-code go.mod
