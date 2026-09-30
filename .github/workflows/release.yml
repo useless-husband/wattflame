@@ -1,0 +1,36 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  binary:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: test
+        run: make test
+      - name: build
+        run: make build VERSION=${GITHUB_REF_NAME}
+      - name: package
+        run: |
+          name=wattflame_${GITHUB_REF_NAME#v}_darwin_arm64
+          mkdir "$name"
+          cp wattflame LICENSE README.md README.zh-TW.md CHANGELOG.md "$name"/
+          tar -czf "$name.tar.gz" "$name"
+          shasum -a 256 "$name.tar.gz" > checksums.txt
+      - name: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes \
+            wattflame_*.tar.gz checksums.txt
