@@ -81,3 +81,10 @@ type TargetInfo struct {
 	Name            string
 	Path            string // executable path
 }
+
+// ExitStatus says how the launched program ended.
+type ExitStatus struct {
+	Code      int    // exit code; meaningful when Signal is empty
+	Signal    string // name of the signal that killed it, or ""
+	SignalNum int    // its number, for the conventional 128+n exit code
+}

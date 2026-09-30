@@ -56,7 +56,7 @@ type result struct {
 	byLeaf        map[string]uint64 // leaf function -> energy
 	stacks        map[string]int    // "leaf<caller<..." -> count
 	threadNames   map[string]bool
-	status        syscall.WaitStatus
+	status        sampler.ExitStatus
 	exited        bool
 	targets       []sampler.TargetInfo
 	stats         sampler.Stats
@@ -141,7 +141,7 @@ func TestLaunchRecordsStacksAndCounters(t *testing.T) {
 	if !res.exited {
 		t.Fatal("program did not exit")
 	}
-	if !res.status.Exited() || res.status.ExitStatus() != 3 {
+	if res.status.Signal != "" || res.status.Code != 3 {
 		t.Errorf("exit status = %v, want 3", res.status)
 	}
 	if res.records < 200 {
@@ -343,7 +343,7 @@ func TestSystemBinaryIsCountedWithoutStacks(t *testing.T) {
 	sess.Drain(collect)
 
 	exited, status := sess.RootExited()
-	if !exited || status.ExitStatus() != 0 {
+	if !exited || status.Code != 0 || status.Signal != "" {
 		t.Errorf("exited %v, status %v", exited, status)
 	}
 	if withStack != 0 {

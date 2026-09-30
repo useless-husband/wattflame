@@ -3,7 +3,7 @@ LDFLAGS := -s -w -X main.version=$(VERSION)
 PRELOAD := internal/preloadlib/libwattflame_preload.dylib
 PREFIX  ?= /usr/local
 
-.PHONY: build preload test race lint examples demo install clean
+.PHONY: build preload test race lint fuzz bench examples demo install clean
 
 build: preload
 	go build -trimpath -ldflags "$(LDFLAGS)" -o wattflame ./cmd/wattflame
@@ -26,8 +26,18 @@ lint: preload
 	go vet ./...
 	go run honnef.co/go/tools/cmd/staticcheck@latest ./...
 
+fuzz:
+	go test -run '^$$' -fuzz FuzzName -fuzztime 30s ./internal/demangle
+
 examples:
 	$(MAKE) -C examples
+
+# The numbers quoted in the README: attribution against the kernel's own
+# per-phase totals, then the profiler's cost on the two example workloads.
+bench: build examples
+	examples/validate.sh
+	./wattflame record -no-html -o /dev/null -top 0 -- examples/bin/pipeline 3 | grep -E 'Energy|Accounted|Profiler'
+	./wattflame record -no-html -o /dev/null -top 0 -- examples/bin/cores 4 | grep -E 'Energy|Accounted|Profiler'
 
 demo: build examples
 	./wattflame record -o demo.json --open -- examples/bin/cores 4

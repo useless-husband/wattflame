@@ -171,10 +171,14 @@ func (s *Session) Drain(fn func(*Record)) int {
 
 // RootExited reports whether the profiled process has ended, and its wait
 // status when wattflame launched it.
-func (s *Session) RootExited() (bool, syscall.WaitStatus) {
+func (s *Session) RootExited() (bool, ExitStatus) {
 	var status C.int
 	exited := C.wf_root_exited(s.s, &status) != 0
-	return exited, syscall.WaitStatus(status)
+	ws := syscall.WaitStatus(status)
+	if ws.Signaled() {
+		return exited, ExitStatus{Signal: ws.Signal().String(), SignalNum: int(ws.Signal())}
+	}
+	return exited, ExitStatus{Code: ws.ExitStatus()}
 }
 
 // RootPID is the pid of the launched or attached process.
