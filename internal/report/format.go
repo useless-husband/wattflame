@@ -67,6 +67,8 @@ func Percent(part, whole uint64) string {
 		return "0%"
 	case p < 0.1:
 		return "<0.1%"
+	case p >= 99.995 && part < whole:
+		return ">99.99%"
 	case p >= 99.95 && p < 100.05 && part != whole:
 		return fmt.Sprintf("%.2f%%", p)
 	}

@@ -331,6 +331,7 @@ function fmtPct(part, whole) {
   var p = 100 * part / whole;
   if (part <= 0) return '0%';
   if (p < 0.1) return '<0.1%';
+  if (p >= 99.995 && part < whole) return '>99.99%';
   if (p >= 99.95 && part < whole) return p.toFixed(2) + '%';
   return p.toFixed(1) + '%';
 }
