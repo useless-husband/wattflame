@@ -1,0 +1,12 @@
+/wattflame
+/dist/
+/internal/preloadlib/libwattflame_preload.dylib
+/examples/bin/
+*.dSYM/
+.DS_Store
+/coverage.out
+# recordings made while trying things out
+/wattflame.json
+/wattflame.html
+/demo.json
+/demo.html
