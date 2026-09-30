@@ -99,18 +99,24 @@ void wf_cs_release(wf_cs_ref ref) {
 	}
 }
 
-static void ensure_locked(wf_target *t) {
-	if (t->sym_tried || t->task == MACH_PORT_NULL) {
+// Build the symbolicator once. The task port is passed in because it is read
+// under the session lock, which must never be held together with sym_mu: a
+// symbolicator takes milliseconds to build and the sampler must not wait on it.
+static void ensure_locked(wf_target *t, task_t task) {
+	if (t->sym_tried || task == MACH_PORT_NULL) {
 		return;
 	}
 	t->sym_tried = 1;
-	t->symbolicator = wf_cs_create(t->task);
+	t->symbolicator = wf_cs_create(task);
 	t->sym_refreshed = mach_absolute_time();
 }
 
 void wf_cs_ensure(wf_session *s, wf_target *t) {
+	pthread_mutex_lock(&s->mu);
+	task_t task = t->task;
+	pthread_mutex_unlock(&s->mu);
 	pthread_mutex_lock(&s->sym_mu);
-	ensure_locked(t);
+	ensure_locked(t, task);
 	pthread_mutex_unlock(&s->sym_mu);
 }
 
@@ -124,13 +130,14 @@ int wf_symbolicate(wf_session *s, uint32_t target, uint64_t addr, wf_symbol *out
 	pthread_mutex_lock(&s->mu);
 	wf_target *t = target < (uint32_t)s->ntargets ? s->targets[target] : NULL;
 	int alive = t != NULL && t->alive;
+	task_t task = t != NULL ? t->task : MACH_PORT_NULL;
 	pthread_mutex_unlock(&s->mu);
 	if (t == NULL) {
 		return 0;
 	}
 
 	pthread_mutex_lock(&s->sym_mu);
-	ensure_locked(t);
+	ensure_locked(t, task);
 	if (wf_cs_is_null(t->symbolicator)) {
 		pthread_mutex_unlock(&s->sym_mu);
 		return 0;
@@ -145,7 +152,7 @@ int wf_symbolicate(wf_session *s, uint32_t target, uint64_t addr, wf_symbol *out
 		uint64_t quarter_second = 250000000ULL * s->tb.denom / s->tb.numer;
 		if (now - t->sym_refreshed > quarter_second) {
 			t->sym_refreshed = now;
-			wf_cs_ref fresh = wf_cs_create(t->task);
+			wf_cs_ref fresh = wf_cs_create(task);
 			if (!wf_cs_is_null(fresh)) {
 				cs.release(t->symbolicator);
 				t->symbolicator = fresh;

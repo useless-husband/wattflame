@@ -13,17 +13,21 @@
 //   3. once energy has accumulated and there are stacks to give it to, splits
 //      everything accumulated evenly across those stacks.
 //
-// Step 3 exists because the kernel only folds energy into the per-thread total
-// when the thread leaves a core or its quantum expires (about every 10 ms for
-// a thread that never blocks), while stacks are taken every millisecond.
+// The kernel folds energy into a thread's total when the thread leaves its
+// core (left alone, a busy thread is only updated when its quantum expires,
+// about every 10 ms). Suspending a thread to take its stack takes it off its
+// core, so in practice every stack comes with an up-to-date reading and step 3
+// hands each stack the energy used since the one before it. The split only
+// matters when a reading arrives late.
 //
-// A thread that works in bursts shorter than the interval is usually found
-// blocked, with energy but no stack. Charging that energy to the place where
-// it waits would make waiting look expensive. Instead the energy is held until
-// a tick does catch the thread running, and goes to that stack: the same
-// statistics a time profiler relies on, where a burst is seen in proportion to
-// how long it lasts. Only if the thread is not caught for WF_DEFER_NS is a
-// stack taken where it waits.
+// A thread found blocked with fresh energy ran and stopped since the last tick.
+// If it was sampled running a moment ago, the energy is the tail of that run
+// and goes to that stack. Otherwise the whole burst fell between two ticks:
+// charging it to the place where the thread now waits would make waiting look
+// expensive, so the energy is held until a tick does catch the thread running
+// and goes to that stack. That is the statistics every sampling profiler
+// relies on: a burst is seen in proportion to how long it lasts. Only if the
+// thread is not caught for WF_DEFER_NS is a stack taken where it waits.
 //
 // Threads that do not run cost one counter read per tick and are never
 // suspended.
@@ -37,6 +41,18 @@
 // their energy is still read from the per-thread counters, which need no task
 // port. Those are "opaque" targets: counted, but without stacks. An opaque
 // target becomes a full one the moment its handshake arrives.
+//
+// What cannot be read
+//
+// A thread's counters vanish with the thread, and its energy is only folded
+// into them when it leaves a core. A thread that runs for a few milliseconds
+// and exits may never show any energy at all, although its stacks were
+// sampled. The energy is not lost: it is in the kernel's per-process total,
+// which outlives the thread (and, for our own child, the process). The
+// difference between that total and everything the thread counters ever
+// showed is the residual. It is paid out to the stacks of threads that ended
+// with samples but no energy; if there are none, it is emitted without a stack.
+// Either way the profile adds up to what the kernel billed.
 
 #include "wf_internal.h"
 
@@ -89,8 +105,14 @@ struct wf_ptc {
 #define WF_DEFER_NS 50000000ULL       // how long energy may wait for a running stack
 #define WF_DISCOVER_NS 10000000ULL    // how often the process tree is walked
 #define WF_OPAQUE_FLUSH_NS 20000000ULL // how often opaque threads emit a record
-#define WF_MAX_TARGETS 4096
 #define WF_OUT_LIMIT ((size_t)1 << 30)
+// Paying out a residual: the kernel books a dead thread's energy to its
+// process a moment after the thread is gone, so wait WF_SETTLE_DELAY ticks,
+// then pay the smallest residual seen over the next WF_SETTLE_TICKS. Taking
+// the smallest guards against the one-tick illusion of a residual that a
+// counter read just before its thread folded energy in produces.
+#define WF_SETTLE_DELAY 3
+#define WF_SETTLE_TICKS 3
 // User-space addresses fit in 47 bits; anything above is a pointer
 // authentication code.
 #define WF_ADDR_MASK 0x00007fffffffffffULL
@@ -143,22 +165,29 @@ static int read_counts(const wf_session *s, pid_t pid, uint64_t tid,
 	return 1;
 }
 
-static uint64_t process_energy_nj(pid_t pid) {
+// The kernel's totals for a process: all energy, and the part spent on the
+// fastest cores (performance level 0). Works on a zombie that has not been
+// reaped yet.
+static int process_energy(pid_t pid, uint64_t *energy, uint64_t *penergy) {
 	struct rusage_info_v6 ri;
 	if (proc_pid_rusage(pid, RUSAGE_INFO_V6, (rusage_info_t *)&ri) != 0) {
 		return 0;
 	}
-	return ri.ri_energy_nj;
+	*energy = ri.ri_energy_nj;
+	*penergy = ri.ri_penergy_nj;
+	return 1;
 }
 
-// Read the kernel's process total and remember how much thread energy had been
-// seen at that same moment.
+// Read the kernel's process totals and remember how much thread energy had
+// been seen at that same moment, so the two can be compared like for like.
 static void note_process_energy(wf_target *t) {
-	uint64_t e = process_energy_nj(t->pid);
-	if (e > t->energy_last) {
-		t->energy_last = e;
-		t->energy_seen_at_last = t->energy_seen;
+	uint64_t e = 0, pe = 0;
+	if (!process_energy(t->pid, &e, &pe) || e < t->energy_last) {
+		return;
 	}
+	t->energy_last = e;
+	t->penergy_last = pe;
+	memcpy(t->seen_at_last, t->seen, sizeof(t->seen));
 }
 
 // Whether a process was started after the recording began. Such a process has
@@ -264,7 +293,7 @@ static int walk_stack(wf_session *s, wf_target *t, wf_thread *th, uint64_t *fram
 	if (thread_get_state(th->port, ARM_THREAD_STATE64, (thread_state_t)&st, &count) ==
 	    KERN_SUCCESS) {
 		uint64_t pc = (uint64_t)arm_thread_state64_get_pc(st) & WF_ADDR_MASK;
-		uint64_t fp = (uint64_t)arm_thread_state64_get_fp(st);
+		uint64_t fp = (uint64_t)arm_thread_state64_get_fp(st) & WF_ADDR_MASK;
 		*lr = (uint64_t)arm_thread_state64_get_lr(st) & WF_ADDR_MASK;
 
 		n = 0;
@@ -286,10 +315,11 @@ static int walk_stack(wf_session *s, wf_target *t, wf_thread *th, uint64_t *fram
 			frames[n++] = ret;
 			// Callers live at higher addresses. Anything else is a corrupt
 			// or foreign frame record; stop rather than loop.
-			if (rec[0] <= fp) {
+			uint64_t next = rec[0] & WF_ADDR_MASK;
+			if (next <= fp) {
 				break;
 			}
-			fp = rec[0];
+			fp = next;
 		}
 	}
 
@@ -374,13 +404,16 @@ static int acc_is_zero(const wf_thread *th) {
 // them. The division remainder goes to the last stack so totals stay exact.
 static void flush_thread(wf_session *s, wf_target *t, wf_thread *th, uint64_t now_ns) {
 	th->deferred = 0;
+	if (th->acc_energy > 0) {
+		th->had_energy = 1;
+	}
 	if (th->npend == 0) {
 		if (acc_is_zero(th)) {
 			return;
 		}
 		if (th->last_len >= 4) {
-			// No fresh stack (the thread is gone): use the last one seen.
-			emit(s, t, th->tid, now_ns, th->last[1], (uint32_t)th->last[2] | WF_F_OFFCPU,
+			// No fresh stack: add to the last one taken.
+			emit(s, t, th->tid, now_ns, th->last[1], (uint32_t)th->last[2] | WF_F_TOPUP,
 			     th->last + 4, (uint32_t)th->last[3], th->acc);
 		} else {
 			emit(s, t, th->tid, now_ns, 0, WF_F_NOSTACK | (t->opaque ? WF_F_OPAQUE : 0), NULL, 0,
@@ -413,6 +446,21 @@ static void flush_thread(wf_session *s, wf_target *t, wf_thread *th, uint64_t no
 	th->acc_energy = 0;
 }
 
+// Emit what a thread has accumulated as one record without a stack, tagged
+// with flags. Used for energy that by its nature has no stack to go to.
+static void flush_thread_as(wf_session *s, wf_target *t, wf_thread *th, uint64_t now_ns,
+                            uint32_t flags) {
+	th->deferred = 0;
+	th->npend = 0;
+	th->pend_len = 0;
+	if (acc_is_zero(th)) {
+		return;
+	}
+	emit(s, t, th->tid, now_ns, 0, WF_F_NOSTACK | flags, NULL, 0, th->acc);
+	memset(th->acc, 0, sizeof(th->acc));
+	th->acc_energy = 0;
+}
+
 // ---------------------------------------------------------------------------
 // Threads
 
@@ -439,20 +487,201 @@ static void release_thread(wf_thread *th) {
 	th->last_len = th->last_cap = 0;
 }
 
-// Flush and forget every thread of a target.
+// What the kernel has billed the process beyond what its threads' counters
+// showed and beyond what has been paid out already, split into the fastest
+// level and the rest. Both sides of the comparison come from the same tick.
+static void residual(const wf_session *s, const wf_target *t, uint64_t out[2]) {
+	uint64_t total = t->energy_last > t->energy_start ? t->energy_last - t->energy_start : 0;
+	uint64_t fast = t->penergy_last > t->penergy_start ? t->penergy_last - t->penergy_start : 0;
+	if (fast > total) {
+		fast = total;
+	}
+	uint64_t seen_fast = t->seen_at_last[0], seen_rest = 0;
+	for (int l = 1; l < WF_MAX_LEVELS; l++) {
+		seen_rest += t->seen_at_last[l];
+	}
+	if (s->stats.nlevels < 2) {
+		// One kind of core: no split to make.
+		seen_fast += seen_rest;
+		seen_rest = 0;
+		fast = total;
+	}
+	uint64_t have[2] = {fast, total - fast};
+	uint64_t seen[2] = {seen_fast + t->resid_paid[0], seen_rest + t->resid_paid[1]};
+	for (int k = 0; k < 2; k++) {
+		out[k] = have[k] > seen[k] ? have[k] - seen[k] : 0;
+	}
+}
+
+// Whether the thread's last stack was taken while it ran, within the last
+// couple of ticks.
+static int ran_recently(const wf_session *s, const wf_thread *th, uint64_t now_ns) {
+	return th->last_len >= 4 && !(th->last[2] & WF_F_OFFCPU) &&
+	       now_ns - th->last[0] <= 3ULL * s->interval_us * 1000;
+}
+
+// Remember a stack of a thread that is gone, to be paid from the residual.
+static void add_orphan(wf_target *t, uint64_t tid, const uint64_t *sample) {
+	size_t n = (size_t)sample[3];
+	size_t need = t->orph_len + 5 + n;
+	if (need > t->orph_cap) {
+		size_t cap = t->orph_cap ? t->orph_cap * 2 : 1024;
+		while (cap < need) {
+			cap *= 2;
+		}
+		uint64_t *p = realloc(t->orph, cap * sizeof(uint64_t));
+		if (p == NULL) {
+			return;
+		}
+		t->orph = p;
+		t->orph_cap = cap;
+	}
+	uint64_t *w = t->orph + t->orph_len;
+	w[0] = tid;
+	memcpy(w + 1, sample, (4 + n) * sizeof(uint64_t));
+	t->orph_len = need;
+	t->norph++;
+}
+
+// A thread has ended. Whatever it used after its last reading will never
+// show in its own counters; queue the stack that stands for that time, to be
+// paid from the residual.
+static void thread_gone(wf_session *s, wf_target *t, wf_thread *th, uint64_t now_ns) {
+	if (th->gone) {
+		return;
+	}
+	th->gone = 1;
+	if (!t->opaque) {
+		if (th->npend > 0 && th->acc_energy == 0) {
+			const uint64_t *w = th->pend;
+			for (uint32_t i = 0; i < th->npend; i++) {
+				add_orphan(t, th->tid, w);
+				w += 4 + (size_t)w[3];
+			}
+		} else if (th->npend == 0 && th->acc_energy == 0 && th->last_len >= 4) {
+			// Its energy was read up to its last stack. If that stack was
+			// taken while it ran, moments ago, the thread went on running
+			// after it and that part was never read. The same holds for a
+			// thread that came and went without showing any energy.
+			if (ran_recently(s, th, now_ns) || !th->had_energy) {
+				add_orphan(t, th->tid, th->last);
+			}
+		}
+	}
+	flush_thread(s, t, th, now_ns);
+}
+
+// Emit the first count queued stacks with owed split evenly among them.
+static void pay_orphans(wf_session *s, wf_target *t, uint32_t count, const uint64_t owed[2]) {
+	uint64_t w[WF_W_COUNT][WF_MAX_LEVELS];
+	memset(w, 0, sizeof(w));
+	const uint64_t *o = t->orph;
+	for (uint32_t i = 0; i < count; i++) {
+		uint32_t n = (uint32_t)o[4];
+		for (int k = 0; k < 2; k++) {
+			uint64_t share = owed[k] / count;
+			if (i + 1 == count) {
+				share = owed[k] - share * (count - 1);
+			}
+			w[WF_W_ENERGY_NJ][k] = share;
+		}
+		if (w[WF_W_ENERGY_NJ][0] + w[WF_W_ENERGY_NJ][1] > 0) {
+			emit(s, t, o[0], o[1], o[2], (uint32_t)o[3] | WF_F_RESIDUAL | WF_F_TOPUP, o + 5, n, w);
+		}
+		o += 5 + n;
+	}
+	t->resid_paid[0] += owed[0];
+	t->resid_paid[1] += owed[1];
+	size_t used = (size_t)(o - t->orph);
+	memmove(t->orph, o, (t->orph_len - used) * sizeof(uint64_t));
+	t->orph_len -= used;
+	t->norph -= count;
+}
+
+// Pay the residual out to the queued stacks. While the process lives this is
+// done in batches, each after the wait described at WF_SETTLE_DELAY. With
+// final set, everything owed now is paid to whatever is queued, and if nothing
+// is, it is emitted without a stack.
+static void settle(wf_session *s, wf_target *t, uint64_t now_ns, int final) {
+	uint64_t owed[2];
+	residual(s, t, owed);
+	if (final) {
+		if (t->norph > 0) {
+			pay_orphans(s, t, t->norph, owed);
+		} else if (owed[0] + owed[1] >= 1000) {
+			// Below a microjoule it is rounding, not a missed thread.
+			uint64_t w[WF_W_COUNT][WF_MAX_LEVELS];
+			memset(w, 0, sizeof(w));
+			w[WF_W_ENERGY_NJ][0] = owed[0];
+			w[WF_W_ENERGY_NJ][1] = owed[1];
+			emit(s, t, 0, now_ns, 0, WF_F_NOSTACK | WF_F_RESIDUAL | (t->opaque ? WF_F_OPAQUE : 0),
+			     NULL, 0, w);
+			t->resid_paid[0] += owed[0];
+			t->resid_paid[1] += owed[1];
+		}
+		t->nbatch = 0;
+		return;
+	}
+	if (t->norph == 0) {
+		return;
+	}
+	if (t->nbatch == 0) {
+		// Everything queued so far forms the batch; later arrivals wait
+		// for the next one.
+		t->nbatch = t->norph;
+		t->orph_age = 0;
+		t->orph_min[0] = t->orph_min[1] = UINT64_MAX;
+	}
+	if (++t->orph_age <= WF_SETTLE_DELAY) {
+		return;
+	}
+	for (int k = 0; k < 2; k++) {
+		if (owed[k] < t->orph_min[k]) {
+			t->orph_min[k] = owed[k];
+		}
+	}
+	if (t->orph_age < WF_SETTLE_DELAY + WF_SETTLE_TICKS) {
+		return;
+	}
+	pay_orphans(s, t, t->nbatch, t->orph_min);
+	t->nbatch = 0;
+}
+
+// End every thread of a target.
 static void drop_threads(wf_session *s, wf_target *t, uint64_t now_ns) {
 	for (int i = 0; i < t->nth; i++) {
-		flush_thread(s, t, &t->th[i], now_ns);
+		thread_gone(s, t, &t->th[i], now_ns);
 		release_thread(&t->th[i]);
 	}
 	t->nth = 0;
 }
 
-static void target_died(wf_session *s, wf_target *t, uint64_t now_ns) {
+// Close an entry. exec is nonzero when the process lives on under the same
+// pid as a new image; its counters then carry over to the entry that follows.
+static void target_died(wf_session *s, wf_target *t, uint64_t now_ns, int exec) {
 	if (!t->alive) {
 		return;
 	}
+	if (!exec) {
+		// One more look at the totals. For our own child this still works
+		// after it has exited, as long as it has not been reaped.
+		note_process_energy(t);
+	}
+	wf_carry *c = &t->carry_out;
+	c->n = 0;
+	for (int i = 0; i < t->nth && c->n < WF_CARRY_MAX; i++) {
+		if (t->th[i].have_prev) {
+			memcpy(c->prev[c->n++], t->th[i].prev, sizeof(c->prev[0]));
+		}
+	}
+	c->energy = t->energy_last;
+	c->penergy = t->penergy_last;
 	drop_threads(s, t, now_ns);
+	settle(s, t, now_ns, 1);
+	free(t->orph);
+	t->orph = NULL;
+	t->orph_len = t->orph_cap = 0;
+	t->closed = 1;
 	t->alive = 0;
 }
 
@@ -478,7 +707,7 @@ static void sweep_threads(wf_session *s, wf_target *t, uint64_t now_ns) {
 			i++;
 			continue;
 		}
-		flush_thread(s, t, &t->th[i], now_ns);
+		thread_gone(s, t, &t->th[i], now_ns);
 		release_thread(&t->th[i]);
 		t->th[i] = t->th[t->nth - 1];
 		t->nth--;
@@ -489,12 +718,44 @@ static void sweep_threads(wf_session *s, wf_target *t, uint64_t now_ns) {
 // Where a newly found thread's counters start. A thread that existed before
 // the recording starts from its current values. One born during the recording
 // starts from zero, so the energy it used before it was noticed still counts.
+// The first thread of an image that replaced another through exec starts
+// where the old image's calling thread stopped.
 static void set_baseline(wf_session *s, wf_target *t, wf_thread *th) {
 	if (t->listed || t->from_zero) {
 		th->have_prev = 1; // prev is all zero
-	} else {
-		th->have_prev = read_counts(s, t->pid, th->tid, th->prev);
+		return;
 	}
+	uint64_t cur[WF_W_COUNT][WF_MAX_LEVELS];
+	if (!read_counts(s, t->pid, th->tid, cur)) {
+		th->have_prev = 0;
+		return;
+	}
+	// Among the old image's threads, the one whose counters were copied is
+	// the one the new thread's counters have all moved on from. With several
+	// candidates take the closest.
+	int best = -1;
+	uint64_t best_energy = 0;
+	for (int i = 0; i < t->carry_in.n; i++) {
+		int fits = 1;
+		uint64_t energy = 0;
+		for (int m = 0; m < WF_W_COUNT && fits; m++) {
+			for (int l = 0; l < WF_MAX_LEVELS; l++) {
+				if (t->carry_in.prev[i][m][l] > cur[m][l]) {
+					fits = 0;
+					break;
+				}
+			}
+		}
+		for (int l = 0; l < WF_MAX_LEVELS; l++) {
+			energy += t->carry_in.prev[i][WF_W_ENERGY_NJ][l];
+		}
+		if (fits && (best < 0 || energy > best_energy)) {
+			best = i;
+			best_energy = energy;
+		}
+	}
+	memcpy(th->prev, best >= 0 ? t->carry_in.prev[best] : cur, sizeof(th->prev));
+	th->have_prev = 1;
 }
 
 // Bring a full target's threads in line with its task.
@@ -502,7 +763,9 @@ static void refresh_threads(wf_session *s, wf_target *t, uint64_t now_ns) {
 	thread_act_array_t list = NULL;
 	mach_msg_type_number_t n = 0;
 	if (task_threads(t->task, &list, &n) != KERN_SUCCESS) {
-		target_died(s, t, now_ns);
+		// Whether the process exited or called exec is for the caller to
+		// tell; closing as exec keeps the counters for a successor.
+		target_died(s, t, now_ns, 1);
 		return;
 	}
 
@@ -599,14 +862,13 @@ static uint64_t thread_set_hash(wf_session *s, pid_t pid) {
 	return h | 1;
 }
 
-static void tick_thread(wf_session *s, wf_target *t, wf_thread *th, uint64_t now_ns) {
+// Read a thread's counters and add what is new to its accumulator. Returns 0
+// if the thread no longer exists.
+static int accumulate(wf_session *s, wf_target *t, wf_thread *th) {
 	uint64_t cur[WF_W_COUNT][WF_MAX_LEVELS];
 	if (!read_counts(s, t->pid, th->tid, cur)) {
-		// Thread is gone; whatever it still owes goes to its last stacks.
-		flush_thread(s, t, th, now_ns);
-		return;
+		return 0;
 	}
-
 	if (th->have_prev) {
 		for (int m = 0; m < WF_W_COUNT; m++) {
 			for (int l = 0; l < WF_MAX_LEVELS; l++) {
@@ -615,7 +877,7 @@ static void tick_thread(wf_session *s, wf_target *t, wf_thread *th, uint64_t now
 					th->acc[m][l] += d;
 					if (m == WF_W_ENERGY_NJ) {
 						th->acc_energy += d;
-						t->energy_seen += d;
+						t->seen[l] += d;
 					}
 				}
 			}
@@ -623,6 +885,16 @@ static void tick_thread(wf_session *s, wf_target *t, wf_thread *th, uint64_t now
 	}
 	memcpy(th->prev, cur, sizeof(cur));
 	th->have_prev = 1;
+	return 1;
+}
+
+static void tick_thread(wf_session *s, wf_target *t, wf_thread *th, uint64_t now_ns) {
+	if (!accumulate(s, t, th)) {
+		// The thread is gone. It stays in the list, idle, until the next
+		// refresh removes it.
+		thread_gone(s, t, th, now_ns);
+		return;
+	}
 
 	if (t->opaque) {
 		// No stacks to wait for; just keep the record count down.
@@ -636,7 +908,9 @@ static void tick_thread(wf_session *s, wf_target *t, wf_thread *th, uint64_t now
 		take_sample(s, t, th, now_ns, 0);
 	}
 	if (th->acc_energy > 0) {
-		if (th->npend > 0) {
+		if (th->npend > 0 || ran_recently(s, th, now_ns)) {
+			// Either fresh stacks are waiting, or the thread stopped right
+			// after its last one and this is the tail of that run.
 			flush_thread(s, t, th, now_ns);
 		} else if (++th->deferred >= s->defer_ticks) {
 			// Not caught running for a while: settle for where it waits.
@@ -660,13 +934,24 @@ static wf_target *find_alive(wf_session *s, pid_t pid) {
 	return NULL;
 }
 
-// Append a target. The caller holds s->mu and owns task (may be null).
-static wf_target *new_target(wf_session *s, pid_t pid, task_t task, int from_zero) {
-	if (s->ntargets >= WF_MAX_TARGETS) {
-		return NULL;
+// Append a target. The caller holds s->mu and owns task (null for an opaque
+// target). carry, if given, is what the previous image under this pid left
+// behind on exec.
+static wf_target *new_target(wf_session *s, pid_t pid, task_t task, int from_zero,
+                             const wf_carry *carry) {
+	if (s->ntargets == s->captargets) {
+		int cap = s->captargets ? s->captargets * 2 : 64;
+		wf_target **p = realloc(s->targets, (size_t)cap * sizeof(wf_target *));
+		if (p == NULL) {
+			s->stats.targets_lost++;
+			return NULL;
+		}
+		s->targets = p;
+		s->captargets = cap;
 	}
 	wf_target *t = calloc(1, sizeof(*t));
 	if (t == NULL) {
+		s->stats.targets_lost++;
 		return NULL;
 	}
 	t->index = (uint32_t)s->ntargets;
@@ -674,9 +959,18 @@ static wf_target *new_target(wf_session *s, pid_t pid, task_t task, int from_zer
 	t->task = task;
 	t->opaque = task == MACH_PORT_NULL;
 	t->alive = 1;
-	t->from_zero = from_zero;
-	t->energy_start = from_zero ? 0 : process_energy_nj(pid);
+	if (carry != NULL && carry->n > 0) {
+		t->carry_in = *carry;
+		t->energy_start = carry->energy;
+		t->penergy_start = carry->penergy;
+	} else {
+		t->from_zero = from_zero;
+		if (!from_zero) {
+			process_energy(pid, &t->energy_start, &t->penergy_start);
+		}
+	}
 	t->energy_last = t->energy_start;
+	t->penergy_last = t->penergy_start;
 	if (proc_name(pid, t->name, sizeof(t->name)) <= 0) {
 		snprintf(t->name, sizeof(t->name), "pid %d", pid);
 	}
@@ -688,8 +982,8 @@ static wf_target *new_target(wf_session *s, pid_t pid, task_t task, int from_zer
 }
 
 // Track a process by pid alone: energy, no stacks. Caller holds s->mu.
-static void add_opaque(wf_session *s, pid_t pid, int from_zero) {
-	new_target(s, pid, MACH_PORT_NULL, from_zero);
+static void add_opaque(wf_session *s, pid_t pid, int from_zero, const wf_carry *carry) {
+	new_target(s, pid, MACH_PORT_NULL, from_zero, carry);
 }
 
 static void send_go(mach_port_t reply) {
@@ -708,6 +1002,17 @@ static void send_go(mach_port_t reply) {
 	}
 }
 
+// Book everything the target's threads have used up to now as process
+// startup. Called while the process sits blocked in its handshake, before any
+// of its own code has run.
+static void book_startup(wf_session *s, wf_target *t, uint64_t now_ns) {
+	for (int i = 0; i < t->nth; i++) {
+		if (accumulate(s, t, &t->th[i])) {
+			flush_thread_as(s, t, &t->th[i], now_ns, WF_F_STARTUP);
+		}
+	}
+}
+
 // Register a task whose port we now hold. Takes ownership of the task send
 // right and of the reply port. If sampling has not started yet the reply is
 // held back, which keeps the process parked in its handshake until wf_start.
@@ -716,6 +1021,7 @@ static void add_target(wf_session *s, pid_t pid, task_t task, mach_port_t reply)
 
 	pthread_mutex_lock(&s->mu);
 	wf_target *t = NULL;
+	const wf_carry *carry = NULL;
 	for (int i = 0; i < s->ntargets && t == NULL; i++) {
 		wf_target *old = s->targets[i];
 		if (!old->alive) {
@@ -736,12 +1042,11 @@ static void add_target(wf_session *s, pid_t pid, task_t task, mach_port_t reply)
 		if (old->opaque && proc_pidpath(pid, path, sizeof(path)) > 0 &&
 		    strcmp(path, old->path) == 0) {
 			// The process was already being counted by pid; now it can be
-			// sampled too. What it used until now stays on record without
-			// a stack.
+			// sampled too. What it used until now was the system loading
+			// it.
+			book_startup(s, old, now_ns);
 			drop_threads(s, old, now_ns);
-			pthread_mutex_lock(&s->sym_mu);
 			old->task = task;
-			pthread_mutex_unlock(&s->sym_mu);
 			old->opaque = 0;
 			old->listed = 0;
 			old->from_zero = 0;
@@ -749,11 +1054,13 @@ static void add_target(wf_session *s, pid_t pid, task_t task, mach_port_t reply)
 		} else {
 			// Same pid but a new task or a new executable: the process
 			// called exec.
-			target_died(s, old, now_ns);
+			target_died(s, old, now_ns, 1);
+			carry = &old->carry_out;
 		}
 	}
-	if (t == NULL) {
-		t = new_target(s, pid, task, 0);
+	int fresh = t == NULL;
+	if (fresh) {
+		t = new_target(s, pid, task, carry == NULL && started_during_recording(s, pid), carry);
 	}
 	if (t == NULL) {
 		mach_port_deallocate(mach_task_self(), task);
@@ -763,6 +1070,9 @@ static void add_target(wf_session *s, pid_t pid, task_t task, mach_port_t reply)
 	}
 	refresh_threads(s, t, now_ns);
 	t->thread_hash = thread_set_hash(s, pid);
+	if (fresh && t->alive) {
+		book_startup(s, t, now_ns);
+	}
 
 	if (s->sampling) {
 		pthread_mutex_unlock(&s->mu);
@@ -795,17 +1105,23 @@ static void discover_children(wf_session *s) {
 			if (pid <= 0 || pid == getpid() || find_alive(s, pid) != NULL) {
 				continue;
 			}
+			// A child running as another user (a setuid program) cannot be
+			// inspected at all. Adding it would only have it declared dead
+			// and found again on every pass.
+			if (thread_set_hash(s, pid) == 0) {
+				continue;
+			}
 			int from_zero = started_during_recording(s, pid);
 			// Root may take the task port of any process that is not a
 			// protected system binary, handshake or not.
 			task_t task = MACH_PORT_NULL;
 			if (s->is_root && task_for_pid(mach_task_self(), pid, &task) == KERN_SUCCESS) {
-				if (new_target(s, pid, task, from_zero) == NULL) {
+				if (new_target(s, pid, task, from_zero, NULL) == NULL) {
 					mach_port_deallocate(mach_task_self(), task);
 				}
 				continue;
 			}
-			add_opaque(s, pid, from_zero);
+			add_opaque(s, pid, from_zero, NULL);
 		}
 	}
 }
@@ -817,20 +1133,18 @@ static void tick_target(wf_session *s, wf_target *t, uint64_t now_ns) {
 	uint64_t h = thread_set_hash(s, t->pid);
 	if (h == 0) {
 		// The pid no longer answers: the process has exited.
-		target_died(s, t, now_ns);
+		target_died(s, t, now_ns, 0);
 		return;
 	}
 	if (h != t->thread_hash || !t->listed) {
 		if (t->opaque) {
 			// A different executable under the same pid means exec: close
-			// this entry and start a new one under the new name. exec
-			// carries the thread's counters over, so the new entry starts
-			// from their current values, not from zero.
+			// this entry and start a new one under the new name.
 			char path[sizeof(t->path)];
 			if (t->listed && proc_pidpath(t->pid, path, sizeof(path)) > 0 &&
 			    strcmp(path, t->path) != 0) {
-				target_died(s, t, now_ns);
-				add_opaque(s, t->pid, 0);
+				target_died(s, t, now_ns, 1);
+				add_opaque(s, t->pid, 0, &t->carry_out);
 				return;
 			}
 			refresh_threads_opaque(s, t, now_ns);
@@ -840,7 +1154,7 @@ static void tick_target(wf_session *s, wf_target *t, uint64_t now_ns) {
 				// The task is gone but the pid is not: exec into a program
 				// that does not announce itself.
 				if (find_alive(s, t->pid) == NULL) {
-					add_opaque(s, t->pid, 0);
+					add_opaque(s, t->pid, 0, &t->carry_out);
 				}
 				return;
 			}
@@ -850,9 +1164,8 @@ static void tick_target(wf_session *s, wf_target *t, uint64_t now_ns) {
 	for (int i = 0; i < t->nth; i++) {
 		tick_thread(s, t, &t->th[i], now_ns);
 	}
-	if (s->stats.ticks % 8 == 0) {
-		note_process_energy(t);
-	}
+	note_process_energy(t);
+	settle(s, t, now_ns, 0);
 }
 
 // Notice the root process ending.
@@ -861,7 +1174,8 @@ static void check_root(wf_session *s, uint64_t now_ns) {
 		return;
 	}
 	if (s->root_is_child) {
-		// WNOWAIT leaves the zombie in place until its targets are closed.
+		// WNOWAIT leaves the zombie in place, which keeps its energy total
+		// readable until its entry has been closed.
 		siginfo_t info;
 		memset(&info, 0, sizeof(info));
 		if (waitid(P_PID, (id_t)s->root_pid, &info, WEXITED | WNOHANG | WNOWAIT) != 0 ||
@@ -870,10 +1184,16 @@ static void check_root(wf_session *s, uint64_t now_ns) {
 		}
 		wf_target *t = find_alive(s, s->root_pid);
 		if (t != NULL) {
-			target_died(s, t, now_ns);
+			target_died(s, t, now_ns, 0);
 		}
 		int status = 0;
-		waitpid(s->root_pid, &status, 0);
+		struct rusage ru;
+		memset(&ru, 0, sizeof(ru));
+		if (wait4(s->root_pid, &status, 0, &ru) == s->root_pid) {
+			s->root_tree_cpu_ns =
+			    ((uint64_t)ru.ru_utime.tv_sec + (uint64_t)ru.ru_stime.tv_sec) * 1000000000ULL +
+			    ((uint64_t)ru.ru_utime.tv_usec + (uint64_t)ru.ru_stime.tv_usec) * 1000ULL;
+		}
 		s->root_status = status;
 		s->root_exited = 1;
 		return;
@@ -943,28 +1263,14 @@ static void *sampler_main(void *arg) {
 		}
 		for (int j = 0; j < t->nth; j++) {
 			wf_thread *th = &t->th[j];
-			uint64_t cur[WF_W_COUNT][WF_MAX_LEVELS];
-			if (th->have_prev && read_counts(s, t->pid, th->tid, cur)) {
-				for (int m = 0; m < WF_W_COUNT; m++) {
-					for (int l = 0; l < WF_MAX_LEVELS; l++) {
-						if (cur[m][l] > th->prev[m][l]) {
-							uint64_t d = cur[m][l] - th->prev[m][l];
-							th->acc[m][l] += d;
-							if (m == WF_W_ENERGY_NJ) {
-								th->acc_energy += d;
-								t->energy_seen += d;
-							}
-						}
-					}
-				}
-				memcpy(th->prev, cur, sizeof(cur));
-			}
+			accumulate(s, t, th);
 			if (!t->opaque && th->npend == 0 && !acc_is_zero(th)) {
 				take_sample(s, t, th, end_ns, WF_F_OFFCPU);
 			}
 			flush_thread(s, t, th, end_ns);
 		}
 		note_process_energy(t);
+		settle(s, t, end_ns, 1);
 	}
 	s->stats.elapsed_ns = end_ns;
 	pthread_mutex_unlock(&s->mu);
@@ -990,6 +1296,23 @@ typedef struct {
 	uint8_t trailer[128];
 } wf_hello_rcv;
 
+// Whether port is a task port that can actually be used to inspect the task.
+// A task *name* port also answers pid_for_task, and any process of the same
+// user can get one for any other; accepting it would let a stranger pose as
+// one of the profiled processes.
+static int is_task_port(mach_port_t port) {
+	thread_act_array_t list = NULL;
+	mach_msg_type_number_t n = 0;
+	if (task_threads(port, &list, &n) != KERN_SUCCESS) {
+		return 0;
+	}
+	for (mach_msg_type_number_t i = 0; i < n; i++) {
+		mach_port_deallocate(mach_task_self(), list[i]);
+	}
+	vm_deallocate(mach_task_self(), (vm_address_t)list, n * sizeof(thread_act_t));
+	return 1;
+}
+
 static void *listener_main(void *arg) {
 	wf_session *s = arg;
 	pthread_setname_np("wattflame-listener");
@@ -1014,7 +1337,8 @@ static void *listener_main(void *arg) {
 		mach_port_t reply = m.hdr.msgh_remote_port;
 		// Do not trust the pid in the message; ask the kernel.
 		int pid = 0;
-		if (task == MACH_PORT_NULL || pid_for_task(task, &pid) != KERN_SUCCESS || pid <= 0) {
+		if (task == MACH_PORT_NULL || pid_for_task(task, &pid) != KERN_SUCCESS || pid <= 0 ||
+		    pid == getpid() || !is_task_port(task)) {
 			mach_msg_destroy(&m.hdr);
 			continue;
 		}
@@ -1062,10 +1386,9 @@ wf_session *wf_new(char *err, size_t errlen) {
 	s->page_size = (uint64_t)vm_page_size;
 	s->is_root = geteuid() == 0;
 	s->interval_us = 1000;
-	s->targets = calloc(WF_MAX_TARGETS, sizeof(wf_target *));
 	s->chunk = malloc(WF_CHUNK);
 	s->frames = malloc(WF_MAX_DEPTH * sizeof(uint64_t));
-	if (s->targets == NULL || s->chunk == NULL || s->frames == NULL) {
+	if (s->chunk == NULL || s->frames == NULL) {
 		set_err(err, errlen, "out of memory");
 		wf_free(s);
 		return NULL;
@@ -1154,14 +1477,14 @@ int wf_launch(wf_session *s, const char *preload_path, char *const argv[], char 
 	env[k++] = insert_var;
 	env[k] = NULL;
 
-	// The program starts suspended and is only let go by wf_start, once the
-	// sampler is running, so nothing it does goes unobserved.
-	posix_spawnattr_t attr;
-	posix_spawnattr_init(&attr);
-	posix_spawnattr_setflags(&attr, POSIX_SPAWN_START_SUSPENDED);
+	// The program is not started suspended: if wattflame were killed before
+	// resuming it, it would stay stopped for good. It does not need to be.
+	// A program that can be sampled parks itself in the handshake before
+	// main() and waits for wf_start (giving up after a few seconds if nobody
+	// answers). One that cannot is counted from its first instruction anyway,
+	// because its counters start at zero.
 	pid_t pid = 0;
-	int rc = posix_spawnp(&pid, argv[0], NULL, &attr, argv, env);
-	posix_spawnattr_destroy(&attr);
+	int rc = posix_spawnp(&pid, argv[0], NULL, NULL, argv, env);
 	free(insert_var);
 	free(env);
 	if (rc != 0) {
@@ -1175,11 +1498,10 @@ int wf_launch(wf_session *s, const char *preload_path, char *const argv[], char 
 	pthread_mutex_lock(&s->mu);
 	s->root_pid = pid;
 	s->root_is_child = 1;
-	s->root_suspended = 1;
-	if (!have_task) {
+	if (!have_task && find_alive(s, pid) == NULL) {
 		// Count it by pid from the start. If it can be sampled, its
-		// handshake will arrive before main() and upgrade this entry.
-		add_opaque(s, pid, 1);
+		// handshake upgrades this entry (or has already created one).
+		add_opaque(s, pid, 1, NULL);
 	}
 	pthread_mutex_unlock(&s->mu);
 	if (have_task) {
@@ -1232,7 +1554,7 @@ int wf_start(wf_session *s, uint32_t interval_us, uint32_t max_depth, char *err,
 		set_err(err, errlen, "already sampling");
 		return -1;
 	}
-	if (s->ntargets == 0) {
+	if (s->root_pid == 0) {
 		set_err(err, errlen, "no target");
 		return -1;
 	}
@@ -1257,26 +1579,22 @@ int wf_start(wf_session *s, uint32_t interval_us, uint32_t max_depth, char *err,
 	pthread_mutex_lock(&s->mu);
 	s->t0 = mach_absolute_time();
 	s->stop = 0;
+	if (pthread_create(&s->sampler, NULL, sampler_main, s) != 0) {
+		pthread_mutex_unlock(&s->mu);
+		set_err(err, errlen, "cannot start the sampler thread");
+		return -1;
+	}
+	s->sampler_running = 1;
 	s->sampling = 1;
-	// Let every parked process go. Baselines were taken when each was added,
-	// while it sat blocked, so nothing it does from here on is missed.
+	// Let every parked process go, now that the sampler exists. Each one's
+	// counters were read while it sat blocked, so nothing it does from here
+	// on is missed.
 	for (int i = 0; i < s->ntargets; i++) {
 		mach_port_t reply = s->targets[i]->pending_reply;
 		s->targets[i]->pending_reply = MACH_PORT_NULL;
 		send_go(reply);
 	}
 	pthread_mutex_unlock(&s->mu);
-
-	if (pthread_create(&s->sampler, NULL, sampler_main, s) != 0) {
-		s->sampling = 0;
-		set_err(err, errlen, "cannot start the sampler thread");
-		return -1;
-	}
-	s->sampler_running = 1;
-	if (s->root_suspended) {
-		kill(s->root_pid, SIGCONT);
-		s->root_suspended = 0;
-	}
 	return 0;
 }
 
@@ -1309,6 +1627,37 @@ size_t wf_drain(wf_session *s, void *buf, size_t cap) {
 	return n;
 }
 
+// Free the symbol tables of processes that ended a while ago. The caller
+// promises to have resolved every address it got from wf_drain before calling
+// this, which is what makes "a while ago" safe: a dead process produces no new
+// records after the drain that follows its death.
+void wf_reap(wf_session *s) {
+	enum { BATCH = 64 };
+	wf_target *old[BATCH];
+	int n = 0;
+	pthread_mutex_lock(&s->mu);
+	for (int i = 0; i < s->ntargets && n < BATCH; i++) {
+		wf_target *t = s->targets[i];
+		if (t->alive || t->dead_drains < 0) {
+			continue;
+		}
+		if (++t->dead_drains >= 3) {
+			t->dead_drains = -1;
+			old[n++] = t;
+		}
+	}
+	pthread_mutex_unlock(&s->mu);
+
+	pthread_mutex_lock(&s->sym_mu);
+	for (int i = 0; i < n; i++) {
+		wf_cs_ref none = {NULL, NULL};
+		wf_cs_release(old[i]->symbolicator);
+		old[i]->symbolicator = none;
+		old[i]->sym_tried = 1;
+	}
+	pthread_mutex_unlock(&s->sym_mu);
+}
+
 int wf_root_exited(wf_session *s, int *status) {
 	pthread_mutex_lock(&s->mu);
 	int e = s->root_exited;
@@ -1317,6 +1666,13 @@ int wf_root_exited(wf_session *s, int *status) {
 	}
 	pthread_mutex_unlock(&s->mu);
 	return e;
+}
+
+uint64_t wf_root_tree_cpu_ns(wf_session *s) {
+	pthread_mutex_lock(&s->mu);
+	uint64_t ns = s->root_tree_cpu_ns;
+	pthread_mutex_unlock(&s->mu);
+	return ns;
 }
 
 pid_t wf_root_pid(wf_session *s) {
@@ -1361,7 +1717,9 @@ int wf_get_target(wf_session *s, uint32_t target, wf_target_info *out) {
 	out->alive = t->alive;
 	out->opaque = t->opaque;
 	out->energy_nj = t->energy_last > t->energy_start ? t->energy_last - t->energy_start : 0;
-	out->threads_energy_nj = t->energy_seen_at_last;
+	for (int l = 0; l < WF_MAX_LEVELS; l++) {
+		out->threads_energy_nj += t->seen_at_last[l];
+	}
 	strlcpy(out->name, t->name, sizeof(out->name));
 	strlcpy(out->path, t->path, sizeof(out->path));
 	pthread_mutex_unlock(&s->mu);
@@ -1392,11 +1750,10 @@ void wf_free(wf_session *s) {
 		s->listener_running = 0;
 	}
 	if (s->root_is_child && !s->root_exited && s->root_pid > 0) {
-		// Never leave a child parked in its handshake or suspended. Ask
-		// politely first so it can clean up, then insist.
+		// A launched program does not outlive its recording. Ask politely
+		// first so it can clean up, then insist.
 		int status = 0;
 		kill(s->root_pid, SIGTERM);
-		kill(s->root_pid, SIGCONT);
 		for (int i = 0; i < 100; i++) {
 			if (waitpid(s->root_pid, &status, WNOHANG) == s->root_pid) {
 				s->root_exited = 1;
@@ -1410,22 +1767,21 @@ void wf_free(wf_session *s) {
 			s->root_exited = 1;
 		}
 	}
-	if (s->targets != NULL) {
-		for (int i = 0; i < s->ntargets; i++) {
-			wf_target *t = s->targets[i];
-			send_go(t->pending_reply);
-			for (int j = 0; j < t->nth; j++) {
-				release_thread(&t->th[j]);
-			}
-			free(t->th);
-			wf_cs_release(t->symbolicator);
-			if (t->task != MACH_PORT_NULL) {
-				mach_port_deallocate(mach_task_self(), t->task);
-			}
-			free(t);
+	for (int i = 0; i < s->ntargets; i++) {
+		wf_target *t = s->targets[i];
+		send_go(t->pending_reply);
+		for (int j = 0; j < t->nth; j++) {
+			release_thread(&t->th[j]);
 		}
-		free(s->targets);
+		free(t->th);
+		free(t->orph);
+		wf_cs_release(t->symbolicator);
+		if (t->task != MACH_PORT_NULL) {
+			mach_port_deallocate(mach_task_self(), t->task);
+		}
+		free(t);
 	}
+	free(s->targets);
 	if (s->rcv_port != MACH_PORT_NULL) {
 		mach_port_mod_refs(mach_task_self(), s->rcv_port, MACH_PORT_RIGHT_RECEIVE, -1);
 		mach_port_deallocate(mach_task_self(), s->rcv_port);

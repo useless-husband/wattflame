@@ -28,6 +28,9 @@ enum {
 	WF_F_OFFCPU = 1u << 1,    // thread was not runnable when sampled
 	WF_F_NOSTACK = 1u << 2,   // weights with no stack (thread or task already gone)
 	WF_F_OPAQUE = 1u << 3,    // from a process that can be counted but not sampled
+	WF_F_STARTUP = 1u << 4,   // used by a process before it could be sampled
+	WF_F_RESIDUAL = 1u << 5,  // billed to the process but read from no thread
+	WF_F_TOPUP = 1u << 6,     // more weight for a stack that was already emitted
 };
 
 // One stack sample with the share of energy / CPU time / cycles / instructions
@@ -58,6 +61,7 @@ typedef struct {
 	uint64_t self_cpu_ns;
 	uint64_t elapsed_ns;
 	uint64_t dropped; // records discarded because the buffer limit was hit
+	uint64_t targets_lost; // processes that could not be tracked (out of memory)
 	uint32_t targets;
 	uint32_t nlevels;
 } wf_stats;
@@ -94,9 +98,9 @@ typedef struct wf_session wf_session;
 // Create an empty session. Returns NULL and fills err on failure.
 wf_session *wf_new(char *err, size_t errlen);
 
-// Spawn argv, suspended, with the preload library injected. wf_start lets it
-// run. A program that cannot load the library is still recorded, but only as
-// per-process energy.
+// Spawn argv with the preload library injected. A program that loads the
+// library waits in its handshake, before main(), until wf_start. One that
+// cannot is still recorded, but only as per-process energy.
 int wf_launch(wf_session *s, const char *preload_path, char *const argv[], char *const envp[],
               char *err, size_t errlen);
 
@@ -110,9 +114,20 @@ void wf_stop(wf_session *s);
 // Copy out whole records accumulated since the last call. Returns bytes written.
 size_t wf_drain(wf_session *s, void *buf, size_t cap);
 
+// Free the symbol tables of processes that ended a few calls ago. Call it
+// after every address obtained from wf_drain has been passed to
+// wf_symbolicate.
+void wf_reap(wf_session *s);
+
 // 1 once the root process has exited; *status receives the wait status when it
 // was our child (launch mode), otherwise 0.
 int wf_root_exited(wf_session *s, int *status);
+
+// CPU time, in nanoseconds, of the launched program and of every descendant
+// that had been waited for when it exited (from wait4). 0 in attach mode or
+// while it is still running. An independent measure of how much of the
+// process tree the recording saw.
+uint64_t wf_root_tree_cpu_ns(wf_session *s);
 pid_t wf_root_pid(wf_session *s);
 
 void wf_get_stats(wf_session *s, wf_stats *out);

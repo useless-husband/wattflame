@@ -144,6 +144,7 @@ func makeProfile(command string, specs []spec) *profile.Profile {
 		PID:        42,
 		Started:    time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC),
 		DurationNs: 2_000_000_000,
+		TreeCPUNs:  4_000_000_000,
 		IntervalUs: 1000,
 		Exit:       "exit 0",
 		Machine:    profile.Machine{Chip: "Apple M5", OS: "macOS 27.0"},
@@ -182,7 +183,8 @@ func TestSummary(t *testing.T) {
 		"10.0 J",
 		"5.00 W average over 2.00 s",
 		"Super 9.00 J (90.0%) · Efficiency 1.00 J (10.0%)",
-		"Accounted  99.0% of what the kernel billed",
+		"Accounted  99.0% of what the kernel billed to the process\n",
+		"Seen       50.0% of the 4.00 s of CPU time the command and its children used",
 		"200 mJ of its own (2.0% on top), 1000 Hz, 9.00 µs pause per stack, 3 of 2003 ticks late",
 		"… and 1 more function\n",
 	} {
@@ -200,6 +202,54 @@ func TestSummary(t *testing.T) {
 	}
 	if rows[1][5] != "hash<a&b>" || rows[2][5] != "_platform_memmove" || rows[2][6] != "libsystem_platform.dylib" {
 		t.Errorf("rows = %q / %q", rows[1][1:], rows[2][1:])
+	}
+}
+
+// When threads end between readings, part of the energy is known only from
+// the process total. The summary says how much was read directly.
+func TestSummarySaysHowMuchWasReadPerThread(t *testing.T) {
+	p := before()
+	p.Meta.Processes[0].KernelEnergyNJ = 10_000_000_000
+	p.Meta.Processes[0].ThreadsEnergyNJ = 6_200_000_000
+	p.Meta.TreeCPUNs = 0
+	var buf bytes.Buffer
+	if err := Summary(&buf, p, 3); err != nil {
+		t.Fatal(err)
+	}
+	if want := "Accounted  100.0% of what the kernel billed to the process (62.0% read thread by thread)\n"; !strings.Contains(buf.String(), want) {
+		t.Errorf("summary lacks %q:\n%s", want, buf.String())
+	}
+	if strings.Contains(buf.String(), "Seen ") {
+		t.Errorf("a coverage line without anything to compare with:\n%s", buf.String())
+	}
+}
+
+// A command line may contain anything, including the template's own markers.
+func TestHTMLSurvivesMarkersInTheData(t *testing.T) {
+	p := makeProfile("./app __WATTFLAME_PROFILE__ __WATTFLAME_TITLE__", []spec{
+		{6_000_000_000, 1_000_000_000, 0, []uint64{fHash + 8, fMain + 16}},
+	})
+	var buf bytes.Buffer
+	if err := HTML(&buf, p); err != nil {
+		t.Fatal(err)
+	}
+	page := buf.String()
+	m := regexp.MustCompile(`(?s)<script id="profile" type="application/json">(.*?)</script>`).FindStringSubmatch(page)
+	if m == nil {
+		t.Fatal("no embedded profile")
+	}
+	back, err := profile.Read(strings.NewReader(m[1]))
+	if err != nil {
+		t.Fatalf("embedded profile does not parse: %v", err)
+	}
+	if got := strings.Join(back.Meta.Command, " "); got != "./app __WATTFLAME_PROFILE__ __WATTFLAME_TITLE__" {
+		t.Errorf("command = %q", got)
+	}
+	if !strings.Contains(page, "<title>./app __WATTFLAME_PROFILE__ __WATTFLAME_TITLE__ · wattflame</title>") {
+		t.Error("title was not written as plain text")
+	}
+	if !strings.HasSuffix(strings.TrimSpace(page), "</html>") {
+		t.Error("page is truncated")
 	}
 }
 

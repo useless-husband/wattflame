@@ -266,11 +266,13 @@ func TestCloseKillsARunningProgram(t *testing.T) {
 	if err := sess.Start(time.Millisecond, 64); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(150 * time.Millisecond)
 	n := 0
-	sess.Drain(func(*sampler.Record) { n++ })
+	for deadline := time.Now().Add(10 * time.Second); n == 0 && time.Now().Before(deadline); {
+		time.Sleep(20 * time.Millisecond)
+		sess.Drain(func(*sampler.Record) { n++ })
+	}
 	if n == 0 {
-		t.Error("no records after 150 ms")
+		t.Error("no records from a program that is spinning")
 	}
 	sess.Stop()
 	sess.Close()
@@ -412,6 +414,154 @@ func TestAttachNeedsRoot(t *testing.T) {
 	}
 	if _, err := sampler.Attach(999999); err == nil || !strings.Contains(err.Error(), "no process") {
 		t.Errorf("missing pid: err = %v", err)
+	}
+}
+
+// Regression tests for defects found in review.
+
+// Energy must add up. What the records carry, including the part that could
+// only be booked per process, has to match the kernel's total for the
+// processes involved: not less (dropped tails) and not more (counted twice).
+func checkConservation(t *testing.T, res result, low, high float64) {
+	t.Helper()
+	var kernel uint64
+	for _, tg := range res.targets {
+		kernel += tg.EnergyNJ
+	}
+	if res.energy == 0 || kernel == 0 {
+		t.Skip("this machine reports no per-thread energy")
+	}
+	if ratio := float64(res.energy) / float64(kernel); ratio < low || ratio > high {
+		t.Errorf("records hold %.1f mJ, the kernel billed %.1f mJ (ratio %.3f, want %.2f to %.2f)",
+			float64(res.energy)/1e6, float64(kernel)/1e6, ratio, low, high)
+	}
+}
+
+// Threads that live for a few milliseconds end between readings. Their last
+// moments used to vanish; now they are booked to the process.
+func TestShortLivedThreadsAreNotLost(t *testing.T) {
+	res := record(t, 20*time.Second, "threads", "100")
+	if res.records == 0 {
+		t.Fatal("no records")
+	}
+	checkConservation(t, res, 0.97, 1.03)
+	if _, ok := res.byLeaf["hot_b"]; !ok {
+		t.Errorf("no stack from the short threads at all: %v", keys(res.byLeaf))
+	}
+}
+
+// exec keeps the pid and copies the thread's counters into the new image.
+// The old image's energy must not be billed again to the new one.
+func TestExecDoesNotCountTwice(t *testing.T) {
+	res := record(t, 20*time.Second, "execchain", "0.3")
+	if len(res.targets) != 2 {
+		t.Fatalf("targets = %+v, want the image before and after exec", res.targets)
+	}
+	if res.targets[0].PID != res.targets[1].PID {
+		t.Errorf("exec changed the pid: %+v", res.targets)
+	}
+	// 0.3 s in the first image, then two threads for 0.3 s in the second.
+	if res.cpu < 700e6 || res.cpu > 1200e6 {
+		t.Errorf("attributed CPU time = %.0f ms, want about 900", float64(res.cpu)/1e6)
+	}
+	if !hasStack(res, "hot_b", "worker") {
+		t.Errorf("second image not sampled: %v", keys(res.byLeaf))
+	}
+	checkConservation(t, res, 0.97, 1.03)
+}
+
+// A few hundred very short processes: every one that announces itself must be
+// tracked (the table used to be fixed-size) and its startup cost recorded.
+func TestManyShortProcesses(t *testing.T) {
+	const n = 300
+	sess, err := sampler.Launch([]string{testprog, "spawnmany", fmt.Sprint(n)}, os.Environ(), preload)
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	defer sess.Close()
+	var cpu uint64
+	startup := 0
+	collect := func(r *sampler.Record) {
+		for l := 0; l < sampler.MaxLevels; l++ {
+			cpu += r.W[sampler.WCPUNs][l]
+		}
+		if r.Flags&sampler.FlagStartup != 0 {
+			startup++
+		}
+	}
+	if err := sess.Start(time.Millisecond, 64); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(60 * time.Second)
+	for time.Now().Before(deadline) {
+		sess.Drain(collect)
+		sess.Reap()
+		if exited, _ := sess.RootExited(); exited {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	sess.Stop()
+	sess.Drain(collect)
+
+	targets := sess.Targets()
+	if len(targets) < n+1 {
+		t.Errorf("%d processes tracked, want the parent and all %d children", len(targets), n)
+	}
+	if st := sess.Stats(); st.TargetsLost != 0 {
+		t.Errorf("%d processes lost", st.TargetsLost)
+	}
+	if startup < n*9/10 {
+		t.Errorf("startup recorded for %d of %d processes", startup, n)
+	}
+	tree := sess.RootTreeCPU()
+	if tree <= 0 {
+		t.Fatal("no CPU time reported for the process tree")
+	}
+	// Each child lives for about a millisecond, nearly all of it before its
+	// own code starts. Most of that must be in the recording.
+	if seen := float64(cpu) / float64(tree); seen < 0.6 || seen > 1.1 {
+		t.Errorf("recording holds %.0f%% of the %.0f ms the process tree used", 100*seen, float64(tree)/1e6)
+	}
+}
+
+// A child that runs as another user cannot be inspected. It must be left
+// alone, not added and dropped again on every pass.
+func TestSetuidChildIsNotReAdded(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root")
+	}
+	if _, err := os.Stat("/usr/bin/top"); err != nil {
+		t.Skip("no /usr/bin/top")
+	}
+	res := record(t, 20*time.Second, "setuid", "0.5")
+	perPID := map[int]int{}
+	for _, tg := range res.targets {
+		perPID[tg.PID]++
+	}
+	for pid, n := range perPID {
+		if n > 2 {
+			t.Errorf("pid %d has %d entries: %+v", pid, n, res.targets)
+		}
+	}
+	if len(res.targets) > 4 {
+		t.Errorf("%d entries for one program and one helper", len(res.targets))
+	}
+}
+
+// Anyone can get a task *name* port for a process of the same user. Sending
+// one to the handshake service must not be mistaken for the process
+// announcing a new image of itself.
+func TestBogusHandshakeIsIgnored(t *testing.T) {
+	res := record(t, 20*time.Second, "spoof", "0.3")
+	if _, ok := res.byLeaf["hot_a"]; !ok {
+		t.Fatalf("nothing sampled before the bogus handshake: %v", keys(res.byLeaf))
+	}
+	if _, ok := res.byLeaf["hot_b"]; !ok {
+		t.Errorf("the process stopped being sampled after the bogus handshake: %v", keys(res.byLeaf))
+	}
+	if res.cpu < 450e6 {
+		t.Errorf("attributed CPU time = %.0f ms, want about 600", float64(res.cpu)/1e6)
 	}
 }
 
