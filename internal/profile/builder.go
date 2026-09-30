@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/useless-husband/wattflame/internal/demangle"
 	"github.com/useless-husband/wattflame/internal/sampler"
 )
 
@@ -152,6 +153,9 @@ func (b *Builder) resolve(target uint32, addr uint64) resolved {
 		return r
 	}
 	s := b.sym.Symbolicate(target, addr)
+	if s.Found {
+		s.Name = demangle.Name(s.Name)
+	}
 	var r resolved
 	r.line = s.Line
 	r.start = s.Start
