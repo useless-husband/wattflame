@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 (unreleased)
+## 0.1.0 (2026-10-01)
 
 First version.
 
@@ -12,3 +12,4 @@ First version.
 - Rust v0 symbol demangling; C++ and Swift names come demangled from the system.
 - Energy that a thread or process used after its last reading is recovered from the kernel's per-process total, so a profile adds up to what the kernel billed. Every recording reports that check (`Accounted`), and how much of the process tree's CPU time it saw (`Seen`).
 - `examples/validate`: compares the attribution with per-phase energy read from the kernel by the program itself.
+- On machines without per-thread energy counters (virtual machines), records a CPU time profile instead.
