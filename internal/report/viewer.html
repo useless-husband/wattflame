@@ -1,0 +1,1119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__WATTFLAME_TITLE__ · wattflame</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7;
+  --surface: #fcfcfb;
+  --text: #0b0b0b;
+  --text-2: #52514e;
+  --muted: #898781;
+  --grid: #e1e0d9;
+  --axis: #c3c2b7;
+  --border: rgba(11, 11, 11, 0.10);
+  --wash: rgba(11, 11, 11, 0.05);
+  --s1: #2a78d6;
+  --s2: #eb6834;
+  --s3: #1baf7a;
+  --neutral: #d5d4cd;
+  --cool: #2a78d6;
+  --warm: #e34948;
+  --mid: #f0efec;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --page: #0d0d0d;
+    --surface: #1a1a19;
+    --text: #ffffff;
+    --text-2: #c3c2b7;
+    --muted: #898781;
+    --grid: #2c2c2a;
+    --axis: #383835;
+    --border: rgba(255, 255, 255, 0.10);
+    --wash: rgba(255, 255, 255, 0.06);
+    --s1: #3987e5;
+    --s2: #d95926;
+    --s3: #199e70;
+    --neutral: #4a4a46;
+    --cool: #3987e5;
+    --warm: #e66767;
+    --mid: #383835;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--page);
+  color: var(--text);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", "PingFang TC", "Microsoft JhengHei", sans-serif;
+  padding: 24px 28px 48px;
+}
+h1 {
+  font: 600 18px/1.3 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+h2 { font-size: 14px; font-weight: 600; margin: 0 0 10px; }
+.top { display: flex; gap: 16px; align-items: flex-start; justify-content: space-between; }
+.meta { color: var(--text-2); margin-top: 4px; font-size: 13px; }
+.lang { display: flex; flex: none; }
+button, input { font: inherit; color: inherit; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; background: var(--surface); }
+.seg button {
+  border: 0; background: transparent; padding: 4px 10px; cursor: pointer; color: var(--text-2);
+  border-left: 1px solid var(--border);
+}
+.seg button:first-child { border-left: 0; }
+.seg button:hover { background: var(--wash); }
+.seg button[aria-pressed="true"] { background: var(--text); color: var(--surface); }
+.seg button:focus-visible, .btn:focus-visible, input:focus-visible, canvas:focus-visible, th button:focus-visible {
+  outline: 2px solid var(--s1); outline-offset: 1px;
+}
+.btn { border: 1px solid var(--border); border-radius: 6px; background: var(--surface); padding: 4px 10px; cursor: pointer; color: var(--text-2); }
+.btn:hover { background: var(--wash); }
+.btn[disabled] { opacity: 0.45; cursor: default; }
+
+.stats { display: flex; flex-wrap: wrap; gap: 12px 44px; margin: 22px 0 6px; align-items: flex-start; }
+.stat .k { color: var(--muted); font-size: 12px; }
+.stat .v { font-size: 20px; font-weight: 600; line-height: 1.2; margin-top: 2px; }
+.stat.hero .v { font-size: 48px; line-height: 1.05; }
+.stat .sub { color: var(--text-2); font-size: 12px; }
+
+section { margin-top: 26px; }
+.panel { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; }
+.controls { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; margin-bottom: 12px; }
+.controls label { color: var(--muted); font-size: 12px; margin-right: 6px; }
+.controls .grp { display: inline-flex; align-items: center; }
+.controls input[type="search"] {
+  border: 1px solid var(--border); border-radius: 6px; background: var(--surface); padding: 4px 8px; width: 220px;
+}
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; color: var(--text-2); font-size: 12px; margin: 0 0 10px; min-height: 18px; }
+.legend .sw { display: inline-block; width: 12px; height: 12px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+.legend .strip { display: inline-block; width: 160px; height: 10px; border-radius: 2px; vertical-align: 0; margin: 0 8px; }
+.legend .ln { display: inline-block; width: 14px; height: 0; border-top: 2px solid; margin-right: 6px; vertical-align: 3px; }
+.status { color: var(--text-2); font-size: 12px; min-height: 18px; margin-top: 8px; }
+#flame-wrap { position: relative; }
+#flame { display: block; width: 100%; cursor: pointer; border-radius: 2px; }
+#tip {
+  position: fixed; z-index: 10; pointer-events: none; display: none;
+  background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18); padding: 10px 12px; max-width: 460px; font-size: 12.5px;
+}
+#tip .name { font: 600 12.5px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; }
+#tip .where { color: var(--muted); margin: 2px 0 8px; overflow-wrap: anywhere; }
+#tip table { border-collapse: collapse; }
+#tip td { padding: 1px 0; vertical-align: baseline; }
+#tip td.val { font-weight: 600; padding-right: 10px; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+#tip td.lab { color: var(--text-2); }
+#tip .lines { margin-top: 8px; color: var(--text-2); }
+
+#timeline svg { display: block; width: 100%; height: 150px; overflow: visible; }
+#timeline .axis text { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+#timeline .gridline { stroke: var(--grid); stroke-width: 1; }
+#timeline .baseline { stroke: var(--axis); stroke-width: 1; }
+#timeline .cross { stroke: var(--muted); stroke-width: 1; }
+
+table.funcs { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.funcs th, table.funcs td { padding: 5px 10px 5px 0; text-align: right; border-bottom: 1px solid var(--grid); white-space: nowrap; font-variant-numeric: tabular-nums; }
+table.funcs th { color: var(--muted); font-weight: 500; font-size: 12px; position: sticky; top: 0; background: var(--surface); }
+table.funcs th button { border: 0; background: none; padding: 0; color: inherit; cursor: pointer; font-size: 12px; }
+table.funcs th[aria-sort] button { color: var(--text); font-weight: 600; }
+table.funcs td.fn, table.funcs th.fn { text-align: left; white-space: normal; overflow-wrap: anywhere; width: 46%; }
+table.funcs td.fn { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; }
+table.funcs td.mod, table.funcs th.mod { text-align: left; color: var(--text-2); }
+table.funcs tbody tr { cursor: pointer; }
+table.funcs tbody tr:hover { background: var(--wash); }
+.bar { display: inline-block; height: 6px; border-radius: 2px; background: var(--s1); vertical-align: 1px; margin-left: 8px; }
+.barcell { width: 110px; text-align: left !important; padding-right: 16px !important; }
+.notes { color: var(--text-2); font-size: 13px; max-width: 86ch; }
+.notes p { margin: 0 0 8px; }
+.empty { color: var(--text-2); padding: 12px 0; }
+@media (max-width: 700px) {
+  body { padding: 16px; }
+  .stat.hero .v { font-size: 40px; }
+  table.funcs .mod, table.funcs .opt { display: none; }
+}
+</style>
+</head>
+<body>
+<div class="top">
+  <div>
+    <h1 id="title"></h1>
+    <div class="meta" id="meta"></div>
+  </div>
+  <div class="lang seg" role="group" aria-label="Language">
+    <button type="button" data-lang="en" aria-pressed="false">EN</button>
+    <button type="button" data-lang="zh" aria-pressed="false">中文</button>
+  </div>
+</div>
+
+<div class="stats" id="stats"></div>
+
+<section id="timeline-section">
+  <h2 data-i18n="powerOverTime"></h2>
+  <div class="panel">
+    <div class="legend" id="timeline-legend"></div>
+    <div id="timeline"></div>
+  </div>
+</section>
+
+<section>
+  <h2 data-i18n="flameTitle"></h2>
+  <div class="panel">
+    <div class="controls">
+      <span class="grp"><label data-i18n="width"></label>
+        <span class="seg" role="group" id="ctl-metric">
+          <button type="button" data-v="energy" data-i18n="energy"></button>
+          <button type="button" data-v="cpu" data-i18n="cpuTime"></button>
+        </span></span>
+      <span class="grp"><label data-i18n="color"></label>
+        <span class="seg" role="group" id="ctl-color">
+          <button type="button" data-v="origin" data-i18n="byOrigin"></button>
+          <button type="button" data-v="power" data-i18n="byPower"></button>
+        </span></span>
+      <span class="grp" id="grp-threads"><label data-i18n="threads"></label>
+        <span class="seg" role="group" id="ctl-threads">
+          <button type="button" data-v="merged" data-i18n="merged"></button>
+          <button type="button" data-v="separate" data-i18n="separate"></button>
+        </span></span>
+      <input type="search" id="search" autocomplete="off" spellcheck="false">
+      <button type="button" class="btn" id="reset" data-i18n="resetZoom" disabled></button>
+    </div>
+    <div class="legend" id="flame-legend"></div>
+    <div id="flame-wrap"><canvas id="flame" tabindex="0" role="img"></canvas></div>
+    <div class="status" id="status"></div>
+  </div>
+</section>
+
+<section>
+  <h2 data-i18n="tableTitle"></h2>
+  <div class="panel">
+    <table class="funcs" id="funcs"><thead></thead><tbody></tbody></table>
+    <div style="margin-top:10px"><button type="button" class="btn" id="more" hidden></button></div>
+  </div>
+</section>
+
+<section>
+  <h2 data-i18n="notesTitle"></h2>
+  <div class="notes" id="notes"></div>
+</section>
+
+<div id="tip" role="status"></div>
+
+<script id="profile" type="application/json">__WATTFLAME_PROFILE__</script>
+<script>
+(function () {
+'use strict';
+
+var P = JSON.parse(document.getElementById('profile').textContent);
+var NL = Math.max(1, (P.levels || []).length);
+var N = P.nodes.length;
+var F = P.frames.length;
+
+// ---------------------------------------------------------------- strings
+var STR = {
+  en: {
+    powerOverTime: 'Power over time', flameTitle: 'Where the energy went',
+    tableTitle: 'Functions', notesTitle: 'How to read this',
+    width: 'Width', color: 'Color', threads: 'Threads', procsThreads: 'Processes and threads',
+    energy: 'Energy', cpuTime: 'CPU time', byOrigin: 'Whose code', byPower: 'Power',
+    merged: 'Merged', separate: 'Separate', resetZoom: 'Reset zoom',
+    search: 'Find a function…',
+    app: 'This program', lib: 'Libraries', system: 'macOS', other: 'Other',
+    cooler: 'draws less', hotter: 'draws more', average: 'average',
+    sEnergy: 'Energy', sPower: 'Average power', sCPU: 'CPU time', sDuration: 'Duration',
+    sAccounted: 'Accounted for', sAccountedSub: 'of what the kernel billed the process',
+    sPowerSub: '{0} while on a core', sCPUSub: '{0} of the run',
+    total: 'Total', self: 'Self', ofAll: 'of all energy', power: 'Power', onCore: 'while on a core',
+    samples: 'stacks', hotLines: 'Hottest lines', line: 'line',
+    all: 'all', func: 'Function', module: 'Module', selfE: 'Self energy', totalE: 'Total energy',
+    share: 'Share', cpu: 'CPU time',
+    showAll: 'Show all {0} functions', showLess: 'Show fewer',
+    matched: '{0} in matching functions, {1} of the total.', noMatch: 'No function matches.',
+    zoomed: 'Zoomed into {0}: {1}, {2} of the total.',
+    hint: 'Click a block to zoom in. Arrow keys move, Enter zooms, Esc resets.',
+    time: 'Time', exit: 'exit',
+    noData: 'No energy was recorded in this profile.',
+    flameAria: 'Flame graph of energy by call stack. The table below lists the same data.',
+    notes: [
+      'Each block is a function; the blocks beneath it are the functions it called. Width is the share of energy (or CPU time) spent in that function and everything below it.',
+      'Energy is what the CPU cores spent running this program, as counted by the kernel for each thread. It does not include the GPU, memory, display or radios.',
+      'Power is energy divided by the time the code was actually on a core. Two functions that take the same time can differ here: one may run on efficiency cores, or keep the core in a lower power state.',
+      'The kernel folds energy into a thread\'s total when the thread leaves a core or its time slice ends, so energy arrives in steps of up to about 10 ms and is shared evenly among the stacks sampled in that step.',
+      '[no stacks] is energy used by processes that can be counted but not looked into: macOS system binaries such as the compiler, hardened apps, and Intel programs running under Rosetta. [process startup] is what a process used while the system was loading it, before its own code began.'
+    ],
+    profiler: 'The profiler itself used {0} ({1} on top of the program), sampling at {2} Hz.'
+  },
+  zh: {
+    powerOverTime: '功率變化', flameTitle: '電用在哪裡',
+    tableTitle: '函式列表', notesTitle: '怎麼看這份報告',
+    width: '寬度', color: '顏色', threads: '執行緒', procsThreads: '行程與執行緒',
+    energy: '能量', cpuTime: 'CPU 時間', byOrigin: '程式碼來源', byPower: '功率',
+    merged: '合併', separate: '分開', resetZoom: '還原縮放',
+    search: '搜尋函式…',
+    app: '這支程式', lib: '函式庫', system: 'macOS', other: '其他',
+    cooler: '比較省電', hotter: '比較耗電', average: '平均',
+    sEnergy: '能量', sPower: '平均功率', sCPU: 'CPU 時間', sDuration: '執行時間',
+    sAccounted: '涵蓋比例', sAccountedSub: '對照核心記在這支程式名下的總能量',
+    sPowerSub: '在核心上執行時 {0}', sCPUSub: '執行時間的 {0}',
+    total: '合計', self: '自身', ofAll: '佔全部能量', power: '功率', onCore: '在核心上執行時',
+    samples: '個取樣', hotLines: '最耗電的行', line: '第',
+    all: '全部', func: '函式', module: '模組', selfE: '自身能量', totalE: '合計能量',
+    share: '佔比', cpu: 'CPU 時間',
+    showAll: '顯示全部 {0} 個函式', showLess: '只顯示前幾名',
+    matched: '符合的函式共用了 {0}，佔全部的 {1}', noMatch: '沒有符合的函式。',
+    zoomed: '已放大到 {0}：{1}，佔全部的 {2}。',
+    hint: '點一個方塊可以放大。方向鍵移動、Enter 放大、Esc 還原。',
+    time: '時間', exit: '結束',
+    noData: '這份紀錄裡沒有量到能量。',
+    flameAria: '依呼叫堆疊排列的能量火焰圖。下方表格列出相同的資料。',
+    notes: [
+      '每個方塊是一個函式，它下面的方塊是它呼叫的函式。寬度代表這個函式（含它往下呼叫的全部）用掉的能量或 CPU 時間佔比。',
+      '能量是 CPU 核心執行這支程式時消耗的電，由作業系統核心替每個執行緒累計。不包含 GPU、記憶體、螢幕和無線網路。',
+      '功率是能量除以程式碼實際在核心上執行的時間。兩個花一樣時間的函式，功率可能不同：其中一個可能跑在節能核心上，或讓核心停在較省電的狀態。',
+      '核心只在執行緒離開核心或時間片用完時，才把能量加進該執行緒的總數，所以能量大約每 10 毫秒到帳一次，並平均分給這段時間內取樣到的堆疊。',
+      '[no stacks] 是那些「算得到耗電、但看不到內部」的行程用掉的能量：macOS 內建的系統程式（例如編譯器）、加固過的 App，以及透過 Rosetta 執行的 Intel 程式。[process startup] 是行程在系統載入它、還沒開始跑自己的程式碼之前用掉的能量。'
+    ],
+    profiler: '剖析器本身用了 {0}（相當於程式的 {1}），取樣頻率 {2} Hz。'
+  }
+};
+var lang = 'en';
+try {
+  var saved = localStorage.getItem('wattflame-lang');
+  if (saved === 'en' || saved === 'zh') lang = saved;
+  else if (/^zh/i.test(navigator.language || '')) lang = 'zh';
+} catch (e) {
+  if (/^zh/i.test(navigator.language || '')) lang = 'zh';
+}
+function t(key) {
+  var s = STR[lang][key];
+  if (s === undefined) s = STR.en[key];
+  for (var i = 1; i < arguments.length; i++) s = s.replace('{' + (i - 1) + '}', arguments[i]);
+  return s;
+}
+
+// ---------------------------------------------------------------- formatting
+function sig3(v) {
+  if (v >= 99.95) return v.toFixed(0);
+  if (v >= 9.995) return v.toFixed(1);
+  return v.toFixed(2);
+}
+function fmtE(nj) {
+  if (!(nj > 0)) return '0 J';
+  if (nj < 1e3) return Math.round(nj) + ' nJ';
+  if (nj < 1e6) return sig3(nj / 1e3) + ' µJ';
+  if (nj < 1e9) return sig3(nj / 1e6) + ' mJ';
+  if (nj < 1e12) return sig3(nj / 1e9) + ' J';
+  return sig3(nj / 1e12) + ' kJ';
+}
+function fmtT(ns) {
+  if (!(ns > 0)) return '0 s';
+  if (ns < 1e3) return Math.round(ns) + ' ns';
+  if (ns < 1e6) return sig3(ns / 1e3) + ' µs';
+  if (ns < 1e9) return sig3(ns / 1e6) + ' ms';
+  if (ns < 600e9) return sig3(ns / 1e9) + ' s';
+  var s = Math.round(ns / 1e9);
+  return Math.floor(s / 60) + ' min ' + (s % 60) + ' s';
+}
+function fmtW(w) {
+  if (!(w > 0)) return '0 W';
+  if (w < 1e-3) return sig3(w * 1e6) + ' µW';
+  if (w < 1) return sig3(w * 1e3) + ' mW';
+  return sig3(w) + ' W';
+}
+function fmtPct(part, whole) {
+  if (!(whole > 0)) return '–';
+  var p = 100 * part / whole;
+  if (part <= 0) return '0%';
+  if (p < 0.1) return '<0.1%';
+  if (p >= 99.95 && part < whole) return p.toFixed(2) + '%';
+  return p.toFixed(1) + '%';
+}
+// Axis ticks are round numbers; drop the padding zeros sig3 adds.
+function tidy(s) { return s.replace(/(\.\d*?)0+(\s)/, '$1$2').replace(/\.(\s)/, '$1'); }
+function niceStep(range, maxTicks) {
+  var raw = range / maxTicks, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  var steps = [1, 2, 2.5, 5, 10];
+  for (var i = 0; i < steps.length; i++) if (steps[i] * mag >= raw) return steps[i] * mag;
+  return 10 * mag;
+}
+function el(tag, cls, text) {
+  var e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+function svgEl(tag, attrs) {
+  var e = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  for (var k in attrs) e.setAttribute(k, attrs[k]);
+  return e;
+}
+function cssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+function hexToRgb(h) {
+  h = h.replace('#', '');
+  if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+}
+function mixRgb(a, b, k) {
+  return [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k];
+}
+function rgbCss(c) {
+  return 'rgb(' + Math.round(c[0]) + ',' + Math.round(c[1]) + ',' + Math.round(c[2]) + ')';
+}
+function luminance(c) {
+  function ch(v) { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }
+  return 0.2126 * ch(c[0]) + 0.7152 * ch(c[1]) + 0.0722 * ch(c[2]);
+}
+// Ink for text drawn on a filled block: whichever of black and white reads better.
+function inkFor(c) {
+  var l = luminance(c);
+  return (l + 0.05) / 0.05 >= 1.05 / (l + 0.05) ? '#0b0b0b' : '#ffffff';
+}
+
+// ---------------------------------------------------------------- decode the tree
+var oParent = new Int32Array(N), oFrame = new Int32Array(N);
+var oS = new Float64Array(N), oC = new Float64Array(N), oI = new Float64Array(N);
+var oEL = [], oTL = [];
+for (var l = 0; l < NL; l++) { oEL.push(new Float64Array(N)); oTL.push(new Float64Array(N)); }
+for (var i = 0; i < N; i++) {
+  var n = P.nodes[i];
+  oParent[i] = n.p; oFrame[i] = n.f;
+  var w = n.w;
+  if (!w || w.length < 2) continue;
+  var L = w[1];
+  oS[i] = w[0];
+  for (l = 0; l < L; l++) {
+    if (l < NL) { oEL[l][i] = w[2 + l]; oTL[l][i] = w[2 + L + l]; }
+    oC[i] += w[2 + 2 * L + l];
+    oI[i] += w[2 + 3 * L + l];
+  }
+}
+// Processes that share a name (the 60 compiler runs of a build, say) are
+// folded into one block in the merged view. procRep maps each process frame
+// to the first frame with its name; procCount is how many share it.
+var nProc = 0, procRep = new Int32Array(F), procCount = new Int32Array(F);
+var firstByName = new Map();
+for (i = 0; i < F; i++) {
+  procRep[i] = i;
+  if (P.frames[i].kind !== 'process') continue;
+  nProc++;
+  var first = firstByName.get(P.frames[i].name);
+  if (first === undefined) { first = i; firstByName.set(P.frames[i].name, i); }
+  procRep[i] = first;
+  procCount[first]++;
+}
+var nThreads = 0;
+for (i = 0; i < F; i++) if (P.frames[i].kind === 'thread') nThreads++;
+
+// A view is the tree actually drawn: the recorded tree with the thread level
+// (and a lone process level) optionally folded away.
+function buildView(merge) {
+  var map = new Int32Array(N);
+  var vParent = [-1], vFrame = [-1];
+  var index = new Map();
+  for (var i = 1; i < N; i++) {
+    var f = oFrame[i], kind = P.frames[f].kind || '';
+    var vp = map[oParent[i]];
+    if ((kind === 'thread' && merge) || (kind === 'process' && nProc <= 1)) { map[i] = vp; continue; }
+    if (kind === 'process' && merge) f = procRep[f];
+    var key = vp * F + f;
+    var v = index.get(key);
+    if (v === undefined) { v = vParent.length; vParent.push(vp); vFrame.push(f); index.set(key, v); }
+    map[i] = v;
+  }
+  var M = vParent.length;
+  var V = {
+    n: M, parent: Int32Array.from(vParent), frame: Int32Array.from(vFrame),
+    selfS: new Float64Array(M), selfE: new Float64Array(M), selfT: new Float64Array(M),
+    selfC: new Float64Array(M), selfI: new Float64Array(M), selfEL: [], selfTL: [],
+    depth: new Int32Array(M), children: []
+  };
+  for (var l = 0; l < NL; l++) { V.selfEL.push(new Float64Array(M)); V.selfTL.push(new Float64Array(M)); }
+  for (i = 0; i < N; i++) {
+    var m = map[i];
+    V.selfS[m] += oS[i]; V.selfC[m] += oC[i]; V.selfI[m] += oI[i];
+    for (l = 0; l < NL; l++) {
+      V.selfEL[l][m] += oEL[l][i]; V.selfTL[l][m] += oTL[l][i];
+      V.selfE[m] += oEL[l][i]; V.selfT[m] += oTL[l][i];
+    }
+  }
+  function inclusive(self) {
+    var inc = Float64Array.from(self);
+    for (var i = M - 1; i > 0; i--) inc[V.parent[i]] += inc[i];
+    return inc;
+  }
+  V.incE = inclusive(V.selfE); V.incT = inclusive(V.selfT); V.incS = inclusive(V.selfS);
+  V.incC = inclusive(V.selfC); V.incI = inclusive(V.selfI);
+  V.incEL = V.selfEL.map(inclusive);
+  for (i = 0; i < M; i++) V.children.push([]);
+  for (i = 1; i < M; i++) { V.children[V.parent[i]].push(i); V.depth[i] = V.depth[V.parent[i]] + 1; }
+  return V;
+}
+
+// ---------------------------------------------------------------- state
+var state = { metric: 'energy', color: 'origin', merge: true, zoom: 0, query: '', hover: -1, focus: -1 };
+var V = buildView(true);
+var totalE = V.incE[0], totalT = V.incT[0];
+var avgW = totalT > 0 ? totalE / totalT : 0;
+var matchFrame = null;
+
+function val(i) { return state.metric === 'energy' ? V.incE[i] : V.incT[i]; }
+function sortChildren() {
+  var inc = state.metric === 'energy' ? V.incE : V.incT;
+  for (var i = 0; i < V.n; i++) V.children[i].sort(function (a, b) { return inc[b] - inc[a] || a - b; });
+}
+
+// ---------------------------------------------------------------- header, stats
+function renderHeader() {
+  var m = P.meta;
+  var title = (m.command && m.command.length) ? m.command.join(' ')
+    : ((m.processes && m.processes[0] ? m.processes[0].name + ' ' : '') + '(pid ' + m.pid + ')');
+  document.getElementById('title').textContent = title;
+  var bits = [];
+  if (m.pid) bits.push('pid ' + m.pid);
+  if (m.exit) bits.push(m.exit);
+  if (m.machine && m.machine.chip) bits.push(m.machine.chip);
+  if (m.machine && m.machine.os) bits.push(m.machine.os);
+  if (m.started) {
+    var d = new Date(m.started);
+    if (!isNaN(d)) bits.push(d.toLocaleString(lang === 'zh' ? 'zh-TW' : undefined));
+  }
+  bits.push((m.tool || 'wattflame'));
+  document.getElementById('meta').textContent = bits.join(' · ');
+}
+
+function renderStats() {
+  var box = document.getElementById('stats');
+  box.textContent = '';
+  var m = P.meta;
+  function stat(k, v, sub, hero) {
+    var s = el('div', 'stat' + (hero ? ' hero' : ''));
+    s.appendChild(el('div', 'k', k));
+    s.appendChild(el('div', 'v', v));
+    if (sub) s.appendChild(el('div', 'sub', sub));
+    box.appendChild(s);
+  }
+  var dur = m.durationNs || 0;
+  stat(t('sEnergy'), fmtE(totalE), '', true);
+  stat(t('sPower'), fmtW(dur > 0 ? totalE / dur : 0), t('sPowerSub', fmtW(avgW)));
+  stat(t('sCPU'), fmtT(totalT), dur > 0 ? t('sCPUSub', (100 * totalT / dur).toFixed(0) + '%') : '');
+  stat(t('sDuration'), fmtT(dur), '');
+  var kernel = 0, threads = 0;
+  (m.processes || []).forEach(function (p) { kernel += p.kernelEnergyNJ || 0; threads += p.threadsEnergyNJ || 0; });
+  if (kernel > 0) stat(t('sAccounted'), fmtPct(threads, kernel), t('sAccountedSub'));
+}
+
+// ---------------------------------------------------------------- timeline
+var LEVEL_VARS = ['--s1', '--s2', '--s3', '--neutral'];
+function renderTimeline() {
+  var sec = document.getElementById('timeline-section');
+  var tl = P.timeline || {};
+  var rows = tl.energyNJ || [];
+  if (rows.length < 3 || !(tl.bucketNs > 0) || !(totalE > 0)) { sec.hidden = true; return; }
+  sec.hidden = false;
+  var host = document.getElementById('timeline');
+  host.textContent = '';
+  var W = Math.max(320, host.clientWidth), H = 150;
+  var padL = 44, padR = 8, padT = 8, padB = 22;
+  var pw = W - padL - padR, ph = H - padT - padB;
+  var nb = rows.length;
+  var watts = rows.map(function (r) { return r.map(function (v) { return v / tl.bucketNs; }); });
+  var maxW = 0;
+  watts.forEach(function (r) { var s = 0; r.forEach(function (v) { s += v; }); if (s > maxW) maxW = s; });
+  var tick = niceStep(maxW || 1, 4);
+  var top = Math.ceil((maxW || 1) / tick - 1e-9) * tick;
+  function X(b) { return padL + pw * b / nb; }
+  function Y(w) { return padT + ph * (1 - w / top); }
+
+  var svg = svgEl('svg', { viewBox: '0 0 ' + W + ' ' + H, role: 'img', 'aria-label': t('powerOverTime') });
+  var axis = svgEl('g', { 'class': 'axis' });
+  for (var y = 0; y <= top + 1e-9; y += tick) {
+    axis.appendChild(svgEl('line', { x1: padL, x2: W - padR, y1: Y(y), y2: Y(y), 'class': y === 0 ? 'baseline' : 'gridline' }));
+    var tx = svgEl('text', { x: padL - 6, y: Y(y) + 4, 'text-anchor': 'end' });
+    tx.textContent = tidy(fmtW(y));
+    axis.appendChild(tx);
+  }
+  var totalNs = nb * tl.bucketNs;
+  var xStep = niceStep(totalNs, 8);
+  for (var xt = 0; xt <= totalNs + 1; xt += xStep) {
+    var xx = padL + pw * xt / totalNs;
+    var txx = svgEl('text', { x: xx, y: H - 5, 'text-anchor': xt === 0 ? 'start' : (xx > W - padR - 24 ? 'end' : 'middle') });
+    txx.textContent = tidy(fmtT(xt));
+    axis.appendChild(txx);
+  }
+  svg.appendChild(axis);
+
+  // Stacked step areas, level 0 at the bottom. A thin surface-colored line
+  // on top of each area keeps the layers apart.
+  // The top layer is drawn first so that where an upper layer is empty the
+  // line of the layer beneath it stays visible instead of being painted over.
+  var bases = [new Float64Array(nb)];
+  for (var l = 0; l < NL; l++) {
+    var next = new Float64Array(nb);
+    for (var b = 0; b < nb; b++) next[b] = bases[l][b] + watts[b][l];
+    bases.push(next);
+  }
+  var surface = cssVar('--surface');
+  for (l = NL - 1; l >= 0; l--) {
+    var color = cssVar(LEVEL_VARS[Math.min(l, LEVEL_VARS.length - 1)]);
+    var d = '', topLine;
+    for (b = 0; b < nb; b++) {
+      var yy = Y(bases[l + 1][b]);
+      d += (b === 0 ? 'M' : 'L') + X(b).toFixed(2) + ' ' + yy.toFixed(2) + 'L' + X(b + 1).toFixed(2) + ' ' + yy.toFixed(2);
+    }
+    topLine = d;
+    for (b = nb - 1; b >= 0; b--) {
+      var y0 = Y(bases[l][b]);
+      d += 'L' + X(b + 1).toFixed(2) + ' ' + y0.toFixed(2) + 'L' + X(b).toFixed(2) + ' ' + y0.toFixed(2);
+    }
+    svg.appendChild(svgEl('path', { d: d + 'Z', fill: color, 'fill-opacity': 0.14 }));
+    if (l < NL - 1) svg.appendChild(svgEl('path', { d: topLine, fill: 'none', stroke: surface, 'stroke-width': 4 }));
+    svg.appendChild(svgEl('path', { d: topLine, fill: 'none', stroke: color, 'stroke-width': 2, 'stroke-linejoin': 'round' }));
+  }
+  var cross = svgEl('line', { y1: padT, y2: padT + ph, 'class': 'cross', visibility: 'hidden' });
+  svg.appendChild(cross);
+  host.appendChild(svg);
+
+  var legend = document.getElementById('timeline-legend');
+  legend.textContent = '';
+  if (NL > 1) {
+    for (l = 0; l < NL; l++) {
+      var item = el('span');
+      var ln = el('span', 'ln');
+      ln.style.borderTopColor = cssVar(LEVEL_VARS[Math.min(l, LEVEL_VARS.length - 1)]);
+      item.appendChild(ln);
+      item.appendChild(document.createTextNode(P.levels[l].name + (P.levels[l].cores ? ' ×' + P.levels[l].cores : '')));
+      legend.appendChild(item);
+    }
+  }
+
+  function show(ev) {
+    var r = svg.getBoundingClientRect();
+    var px = (ev.clientX - r.left) * W / r.width;
+    var b = Math.floor((px - padL) / pw * nb);
+    if (b < 0 || b >= nb) { hide(); return; }
+    var cx = (X(b) + X(b + 1)) / 2;
+    cross.setAttribute('x1', cx); cross.setAttribute('x2', cx); cross.setAttribute('visibility', 'visible');
+    var tip = document.getElementById('tip');
+    tip.textContent = '';
+    tip.appendChild(el('div', 'where', fmtT(b * tl.bucketNs) + ' – ' + fmtT((b + 1) * tl.bucketNs)));
+    var tb = el('table');
+    var sum = 0;
+    for (var l = 0; l < NL; l++) sum += watts[b][l];
+    function row(v, label, varName) {
+      var tr = el('tr');
+      tr.appendChild(el('td', 'val', v));
+      var td = el('td', 'lab');
+      if (varName) { var ln = el('span', 'ln'); ln.style.cssText = 'display:inline-block;width:12px;border-top:2px solid ' + cssVar(varName) + ';margin-right:6px;vertical-align:3px'; td.appendChild(ln); }
+      td.appendChild(document.createTextNode(label));
+      tr.appendChild(td);
+      tb.appendChild(tr);
+    }
+    if (NL > 1) {
+      for (l = 0; l < NL; l++) row(fmtW(watts[b][l]), P.levels[l].name, LEVEL_VARS[Math.min(l, LEVEL_VARS.length - 1)]);
+      row(fmtW(sum), t('total'));
+    } else {
+      row(fmtW(sum), t('power'));
+    }
+    tip.appendChild(tb);
+    placeTip(ev.clientX, ev.clientY);
+  }
+  function hide() { cross.setAttribute('visibility', 'hidden'); hideTip(); }
+  svg.addEventListener('pointermove', show);
+  svg.addEventListener('pointerleave', hide);
+}
+
+// ---------------------------------------------------------------- tooltip
+var tipEl = document.getElementById('tip');
+function placeTip(x, y) {
+  tipEl.style.display = 'block';
+  var r = tipEl.getBoundingClientRect();
+  var left = x + 14, top = y + 16;
+  if (left + r.width > window.innerWidth - 8) left = Math.max(8, x - r.width - 14);
+  if (top + r.height > window.innerHeight - 8) top = Math.max(8, y - r.height - 12);
+  tipEl.style.left = left + 'px';
+  tipEl.style.top = top + 'px';
+}
+function hideTip() { tipEl.style.display = 'none'; }
+
+function frameLabel(i) {
+  if (i === 0) return t('all');
+  var fr = P.frames[V.frame[i]];
+  if (fr.kind === 'process') {
+    if (state.merge && procCount[V.frame[i]] > 1) return fr.name + ' ×' + procCount[V.frame[i]];
+    return fr.name + ' [' + fr.pid + ']';
+  }
+  return fr.name;
+}
+
+function fillTip(i) {
+  tipEl.textContent = '';
+  tipEl.appendChild(el('div', 'name', frameLabel(i)));
+  var fr = i === 0 ? null : P.frames[V.frame[i]];
+  var where = [];
+  if (fr && fr.module) where.push(fr.module);
+  if (fr && fr.file) where.push(fr.file.split('/').pop());
+  if (fr && fr.kind === 'thread' && fr.tid) where.push('tid ' + fr.tid);
+  tipEl.appendChild(el('div', 'where', where.join(' · ')));
+  var tb = el('table');
+  function row(v, label) {
+    var tr = el('tr');
+    tr.appendChild(el('td', 'val', v));
+    tr.appendChild(el('td', 'lab', label));
+    tb.appendChild(tr);
+  }
+  row(fmtE(V.incE[i]), t('total') + ' · ' + fmtPct(V.incE[i], totalE) + ' ' + t('ofAll'));
+  if (V.selfE[i] > 0 && V.selfE[i] !== V.incE[i]) row(fmtE(V.selfE[i]), t('self'));
+  row(fmtT(V.incT[i]), t('cpuTime'));
+  if (V.incT[i] > 0) row(fmtW(V.incE[i] / V.incT[i]), t('power') + ' ' + t('onCore'));
+  if (NL > 1 && V.incE[i] > 0) {
+    for (var l = 0; l < NL; l++) {
+      if (V.incEL[l][i] > 0) row(fmtE(V.incEL[l][i]), P.levels[l].name + ' · ' + fmtPct(V.incEL[l][i], V.incE[i]));
+    }
+  }
+  tipEl.appendChild(tb);
+  if (fr && fr.lines && fr.lines.length && fr.file) {
+    var box = el('div', 'lines');
+    box.appendChild(el('div', '', t('hotLines')));
+    fr.lines.slice(0, 3).forEach(function (ln) {
+      box.appendChild(el('div', '', fr.file.split('/').pop() + ':' + ln.line + '  ' + fmtE(ln.nj)));
+    });
+    tipEl.appendChild(box);
+  }
+}
+
+// ---------------------------------------------------------------- flame graph
+var canvas = document.getElementById('flame');
+var ctx = canvas.getContext('2d');
+var ROW = 21;
+var rows = [];       // rows[depth] = [{i, x, w, dim}]
+var cellOf = null;   // node -> cell or undefined
+var palette = {};
+
+function readPalette() {
+  palette = {
+    app: hexToRgb(cssVar('--s1')), lib: hexToRgb(cssVar('--s2')), system: hexToRgb(cssVar('--s3')),
+    neutral: hexToRgb(cssVar('--neutral')), cool: hexToRgb(cssVar('--cool')), warm: hexToRgb(cssVar('--warm')),
+    mid: hexToRgb(cssVar('--mid')), surface: hexToRgb(cssVar('--surface')), text: cssVar('--text')
+  };
+}
+
+// The power scale is centred on the profile's average. Each arm reaches to
+// the most extreme block that matters (at least 0.5% of the energy), so both
+// ends of the legend are values that actually occur.
+var spanLo = 1, spanHi = 1;
+function computePowerSpan() {
+  var floor = Math.log2(1.15);
+  spanLo = floor; spanHi = floor;
+  for (var i = 1; i < V.n; i++) {
+    if (V.incE[i] < totalE * 0.005 || !(V.incT[i] > 0) || !(avgW > 0)) continue;
+    var r = Math.log2(V.incE[i] / V.incT[i] / avgW);
+    if (r > spanHi) spanHi = r;
+    if (-r > spanLo) spanLo = -r;
+  }
+}
+
+function nodeColor(i) {
+  if (i === 0) return palette.neutral;
+  var fr = P.frames[V.frame[i]];
+  if (state.color === 'power') {
+    if (!(V.incT[i] > 0) || !(avgW > 0) || !(V.incE[i] > 0)) return palette.mid;
+    var k = Math.log2(V.incE[i] / V.incT[i] / avgW);
+    k = k < 0 ? Math.max(-1, k / spanLo) : Math.min(1, k / spanHi);
+    return k < 0 ? mixRgb(palette.mid, palette.cool, -k) : mixRgb(palette.mid, palette.warm, k);
+  }
+  if (fr.kind) return palette.neutral;
+  return palette[fr.origin] || palette.neutral;
+}
+
+function layout() {
+  var W = canvas.clientWidth;
+  rows = [];
+  cellOf = new Array(V.n);
+  function add(i, d, x, w, dim) {
+    while (rows.length <= d) rows.push([]);
+    var c = { i: i, d: d, x: x, w: w, dim: dim };
+    rows[d].push(c);
+    cellOf[i] = c;
+  }
+  var z = state.zoom;
+  var total = val(z);
+  var chain = [];
+  for (var a = z; a !== -1; a = V.parent[a]) chain.push(a);
+  chain.reverse();
+  chain.forEach(function (a, d) { add(a, d, 0, W, a !== z); });
+  if (total > 0) {
+    var stack = [[z, 0, chain.length - 1]];
+    while (stack.length) {
+      var top = stack.pop();
+      var cx = top[1], kids = V.children[top[0]];
+      for (var k = 0; k < kids.length; k++) {
+        var c = kids[k];
+        var w = val(c) / total * W;
+        if (w < 1) break; // children are sorted, the rest are smaller still
+        add(c, top[2] + 1, cx, w, false);
+        stack.push([c, cx, top[2] + 1]);
+        cx += w;
+      }
+    }
+  }
+  rows.forEach(function (r) { r.sort(function (p, q) { return p.x - q.x; }); });
+}
+
+function fit(text, width) {
+  var full = ctx.measureText(text).width;
+  if (full <= width) return text;
+  var n = Math.floor(text.length * width / full) - 1;
+  while (n > 0 && ctx.measureText(text.slice(0, n) + '…').width > width) n--;
+  return n > 0 ? text.slice(0, n) + '…' : '';
+}
+
+function draw() {
+  var dpr = window.devicePixelRatio || 1;
+  var W = canvas.clientWidth, H = Math.max(1, rows.length) * ROW;
+  if (canvas.width !== Math.round(W * dpr) || canvas.height !== Math.round(H * dpr)) {
+    canvas.width = Math.round(W * dpr);
+    canvas.height = Math.round(H * dpr);
+    canvas.style.height = H + 'px';
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  ctx.font = '12px system-ui, -apple-system, "Segoe UI", "PingFang TC", sans-serif';
+  ctx.textBaseline = 'middle';
+  var searching = matchFrame !== null;
+  for (var d = 0; d < rows.length; d++) {
+    var y = d * ROW;
+    for (var k = 0; k < rows[d].length; k++) {
+      var c = rows[d][k];
+      var rgb = nodeColor(c.i);
+      var faded = c.dim || (searching && !(c.i > 0 && matchFrame[V.frame[c.i]]));
+      if (faded) rgb = mixRgb(rgb, palette.surface, searching ? 0.72 : 0.55);
+      var gap = c.w > 3 ? 1 : 0;
+      ctx.fillStyle = rgbCss(rgb);
+      ctx.fillRect(c.x, y, Math.max(c.w - gap, 0.5), ROW - 1);
+      if (c.w > 34) {
+        var label = fit(frameLabel(c.i), c.w - gap - 10);
+        if (label) {
+          ctx.fillStyle = inkFor(rgb);
+          ctx.fillText(label, c.x + 5, y + (ROW - 1) / 2 + 0.5);
+        }
+      }
+    }
+  }
+  var mark = state.hover >= 0 ? state.hover : state.focus;
+  var mc = mark >= 0 ? cellOf[mark] : null;
+  if (mc) {
+    ctx.strokeStyle = palette.text;
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(mc.x + 0.75, mc.d * ROW + 0.75, Math.max(mc.w - (mc.w > 3 ? 1 : 0) - 1.5, 1), ROW - 2.5);
+  }
+}
+
+function cellAt(ev) {
+  var r = canvas.getBoundingClientRect();
+  var x = ev.clientX - r.left, d = Math.floor((ev.clientY - r.top) / ROW);
+  if (d < 0 || d >= rows.length) return null;
+  var row = rows[d], lo = 0, hi = row.length - 1;
+  while (lo <= hi) {
+    var mid = (lo + hi) >> 1, c = row[mid];
+    if (x < c.x) hi = mid - 1;
+    else if (x >= c.x + c.w) lo = mid + 1;
+    else return c;
+  }
+  return null;
+}
+
+function renderLegend() {
+  var lg = document.getElementById('flame-legend');
+  lg.textContent = '';
+  if (state.color === 'origin') {
+    var present = { app: false, lib: false, system: false, other: false };
+    for (var f = 0; f < F; f++) {
+      var fr = P.frames[f];
+      if (fr.kind) continue;
+      present[fr.origin || 'other'] = true;
+    }
+    [['app', '--s1'], ['lib', '--s2'], ['system', '--s3'], ['other', '--neutral']].forEach(function (p) {
+      if (!present[p[0]]) return;
+      var item = el('span');
+      var sw = el('span', 'sw');
+      sw.style.background = cssVar(p[1]);
+      item.appendChild(sw);
+      item.appendChild(document.createTextNode(t(p[0])));
+      lg.appendChild(item);
+    });
+  } else {
+    var lo = avgW / Math.pow(2, spanLo), hi = avgW * Math.pow(2, spanHi);
+    lg.appendChild(document.createTextNode(fmtW(lo) + ' · ' + t('cooler')));
+    var strip = el('span', 'strip');
+    strip.style.background = 'linear-gradient(90deg,' + cssVar('--cool') + ',' + cssVar('--mid') + ',' + cssVar('--warm') + ')';
+    lg.appendChild(strip);
+    lg.appendChild(document.createTextNode(t('hotter') + ' · ' + fmtW(hi)));
+    lg.appendChild(el('span', '', '(' + t('average') + ' ' + fmtW(avgW) + ')'));
+  }
+}
+
+function renderStatus() {
+  var s = document.getElementById('status');
+  var parts = [];
+  if (state.zoom !== 0) parts.push(t('zoomed', frameLabel(state.zoom), fmtE(V.incE[state.zoom]), fmtPct(V.incE[state.zoom], totalE)));
+  if (matchFrame !== null) {
+    var sum = 0, any = false;
+    var stack = [0];
+    while (stack.length) {
+      var i = stack.pop();
+      if (i > 0 && matchFrame[V.frame[i]]) { sum += V.incE[i]; any = true; continue; }
+      var kids = V.children[i];
+      for (var k = 0; k < kids.length; k++) stack.push(kids[k]);
+    }
+    parts.push(any ? t('matched', fmtE(sum), fmtPct(sum, totalE)) : t('noMatch'));
+  }
+  if (!parts.length) parts.push(t('hint'));
+  s.textContent = parts.join(' ');
+  document.getElementById('reset').disabled = state.zoom === 0;
+}
+
+function refreshFlame(relayout) {
+  if (relayout) { sortChildren(); layout(); }
+  draw();
+  renderStatus();
+}
+
+function setZoom(i) {
+  state.zoom = i;
+  state.hover = -1;
+  hideTip();
+  refreshFlame(true);
+}
+
+function setQuery(q) {
+  state.query = q;
+  q = q.trim().toLowerCase();
+  if (!q) { matchFrame = null; }
+  else {
+    matchFrame = new Uint8Array(F);
+    for (var f = 0; f < F; f++) {
+      var fr = P.frames[f];
+      if (fr.name.toLowerCase().indexOf(q) >= 0 || (fr.module && fr.module.toLowerCase().indexOf(q) >= 0)) matchFrame[f] = 1;
+    }
+  }
+  refreshFlame(false);
+}
+
+canvas.addEventListener('pointermove', function (ev) {
+  var c = cellAt(ev);
+  var i = c ? c.i : -1;
+  if (i !== state.hover) { state.hover = i; draw(); }
+  if (c) { fillTip(i); placeTip(ev.clientX, ev.clientY); } else hideTip();
+});
+canvas.addEventListener('pointerleave', function () { state.hover = -1; hideTip(); draw(); });
+canvas.addEventListener('click', function (ev) {
+  var c = cellAt(ev);
+  if (!c) return;
+  state.focus = c.i;
+  setZoom(c.i);
+});
+canvas.addEventListener('keydown', function (ev) {
+  var f = state.focus >= 0 && cellOf[state.focus] ? state.focus : state.zoom;
+  var next = f;
+  if (ev.key === 'ArrowUp') next = V.parent[f] >= 0 ? V.parent[f] : f;
+  else if (ev.key === 'ArrowDown') { var kids = V.children[f]; if (kids.length && cellOf[kids[0]]) next = kids[0]; }
+  else if (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight') {
+    var p = V.parent[f];
+    if (p >= 0) {
+      var sib = V.children[p], at = sib.indexOf(f) + (ev.key === 'ArrowRight' ? 1 : -1);
+      if (at >= 0 && at < sib.length && cellOf[sib[at]]) next = sib[at];
+    }
+  } else if (ev.key === 'Enter') { setZoom(f); ev.preventDefault(); return; }
+  else if (ev.key === 'Escape') { state.focus = -1; setZoom(0); ev.preventDefault(); return; }
+  else return;
+  ev.preventDefault();
+  state.focus = next;
+  draw();
+  var c = cellOf[next];
+  if (c) {
+    var r = canvas.getBoundingClientRect();
+    fillTip(next);
+    placeTip(r.left + Math.min(c.x + 12, r.width - 20), r.top + c.d * ROW + ROW);
+  }
+});
+canvas.addEventListener('blur', function () { state.focus = -1; hideTip(); draw(); });
+document.getElementById('reset').addEventListener('click', function () { setZoom(0); });
+document.getElementById('search').addEventListener('input', function (ev) { setQuery(ev.target.value); });
+
+function bindSeg(id, key, onChange) {
+  var box = document.getElementById(id);
+  function sync() {
+    Array.prototype.forEach.call(box.querySelectorAll('button'), function (b) {
+      b.setAttribute('aria-pressed', String(b.dataset.v === String(state[key])));
+    });
+  }
+  box.addEventListener('click', function (ev) {
+    var b = ev.target.closest('button');
+    if (!b) return;
+    onChange(b.dataset.v);
+    sync();
+  });
+  sync();
+}
+state.threadsMode = 'merged';
+bindSeg('ctl-metric', 'metric', function (v) { state.metric = v; refreshFlame(true); });
+bindSeg('ctl-color', 'color', function (v) { state.color = v; renderLegend(); refreshFlame(false); });
+bindSeg('ctl-threads', 'threadsMode', function (v) {
+  state.threadsMode = v;
+  state.merge = v === 'merged';
+  V = buildView(state.merge);
+  state.zoom = 0; state.hover = -1; state.focus = -1;
+  computePowerSpan();
+  refreshFlame(true);
+});
+if (nThreads <= 1 && nProc <= 1) document.getElementById('grp-threads').hidden = true;
+if (nProc > 1) document.querySelector('#grp-threads label').dataset.i18n = 'procsThreads';
+
+// ---------------------------------------------------------------- table
+var tableState = { sort: 'self', desc: true, all: false };
+var funcStats = null;
+function computeFuncStats() {
+  var M = buildView(true);
+  var by = new Map();
+  for (var i = 1; i < M.n; i++) {
+    var f = M.frame[i];
+    if (P.frames[f].kind) continue;
+    var s = by.get(f);
+    if (!s) { s = { f: f, self: 0, total: 0, selfT: 0, totalT: 0 }; by.set(f, s); }
+    s.self += M.selfE[i]; s.selfT += M.selfT[i];
+    var rec = false;
+    for (var a = M.parent[i]; a > 0; a = M.parent[a]) if (M.frame[a] === f) { rec = true; break; }
+    if (!rec) { s.total += M.incE[i]; s.totalT += M.incT[i]; }
+  }
+  funcStats = Array.from(by.values());
+}
+var COLS = [
+  { k: 'name', cls: 'fn', label: 'func', get: function (s) { return P.frames[s.f].name; }, text: true },
+  { k: 'module', cls: 'mod', label: 'module', get: function (s) { return P.frames[s.f].module || ''; }, text: true },
+  { k: 'self', label: 'selfE', get: function (s) { return s.self; }, fmt: fmtE },
+  { k: 'selfPct', cls: 'barcell', label: 'share', get: function (s) { return s.self; }, bar: true },
+  { k: 'total', label: 'totalE', get: function (s) { return s.total; }, fmt: fmtE },
+  { k: 'totalPct', cls: 'opt', label: 'share', get: function (s) { return s.total; }, fmt: function (v) { return fmtPct(v, totalE); } },
+  { k: 'cpu', cls: 'opt', label: 'cpu', get: function (s) { return s.selfT; }, fmt: function (v) { return v > 0 ? fmtT(v) : '–'; } },
+  { k: 'power', cls: 'opt', label: 'power', get: function (s) { return s.selfT > 0 ? s.self / s.selfT : 0; }, fmt: function (v) { return v > 0 ? fmtW(v) : '–'; } }
+];
+function renderTable() {
+  var table = document.getElementById('funcs');
+  var thead = table.tHead, tbody = table.tBodies[0];
+  thead.textContent = ''; tbody.textContent = '';
+  var col = COLS.filter(function (c) { return c.k === tableState.sort; })[0] || COLS[2];
+  var list = funcStats.slice().sort(function (a, b) {
+    var x = col.get(a), y = col.get(b), r;
+    if (col.text) r = String(x).localeCompare(String(y)); else r = x - y;
+    if (r === 0) r = a.self - b.self;
+    return tableState.desc ? -r : r;
+  });
+  var tr = el('tr');
+  COLS.forEach(function (c) {
+    var th = el('th', c.cls || '');
+    var b = el('button', '', t(c.label) + (c.k === tableState.sort ? (tableState.desc ? ' ↓' : ' ↑') : ''));
+    b.type = 'button';
+    b.addEventListener('click', function () {
+      if (tableState.sort === c.k) tableState.desc = !tableState.desc;
+      else { tableState.sort = c.k; tableState.desc = !c.text; }
+      renderTable();
+    });
+    if (c.k === tableState.sort) th.setAttribute('aria-sort', tableState.desc ? 'descending' : 'ascending');
+    th.appendChild(b);
+    tr.appendChild(th);
+  });
+  thead.appendChild(tr);
+  if (!list.length) {
+    var row = el('tr'), td = el('td', 'fn', t('noData'));
+    td.colSpan = COLS.length;
+    row.appendChild(td); tbody.appendChild(row);
+  }
+  var LIMIT = 25;
+  var shown = tableState.all ? list : list.slice(0, LIMIT);
+  shown.forEach(function (s) {
+    var row = el('tr');
+    COLS.forEach(function (c) {
+      var td = el('td', c.cls || '');
+      var v = c.get(s);
+      if (c.bar) {
+        td.appendChild(document.createTextNode(fmtPct(v, totalE)));
+        var bar = el('span', 'bar');
+        bar.style.width = Math.max(1, Math.round(60 * v / (totalE || 1))) + 'px';
+        td.appendChild(bar);
+      } else td.textContent = c.fmt ? c.fmt(v) : v;
+      row.appendChild(td);
+    });
+    row.addEventListener('click', function () {
+      var name = P.frames[s.f].name;
+      var box = document.getElementById('search');
+      box.value = name;
+      setQuery(name);
+      canvas.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    });
+    tbody.appendChild(row);
+  });
+  var more = document.getElementById('more');
+  more.hidden = list.length <= LIMIT;
+  more.textContent = tableState.all ? t('showLess') : t('showAll', list.length);
+  more.onclick = function () { tableState.all = !tableState.all; renderTable(); };
+}
+
+// ---------------------------------------------------------------- notes, language
+function renderNotes() {
+  var box = document.getElementById('notes');
+  box.textContent = '';
+  STR[lang].notes.forEach(function (p) { box.appendChild(el('p', '', p)); });
+  var s = P.meta.sampler || {};
+  if (s.ticks > 0 && P.meta.intervalUs > 0) {
+    box.appendChild(el('p', '', t('profiler', fmtE(s.selfEnergyNJ || 0), fmtPct(s.selfEnergyNJ || 0, totalE), Math.round(1e6 / P.meta.intervalUs))));
+  }
+}
+
+function applyLanguage() {
+  document.documentElement.lang = lang === 'zh' ? 'zh-Hant' : 'en';
+  Array.prototype.forEach.call(document.querySelectorAll('[data-i18n]'), function (e) { e.textContent = t(e.dataset.i18n); });
+  Array.prototype.forEach.call(document.querySelectorAll('.lang button'), function (b) {
+    b.setAttribute('aria-pressed', String(b.dataset.lang === lang));
+  });
+  document.getElementById('search').placeholder = t('search');
+  document.getElementById('search').setAttribute('aria-label', t('search'));
+  canvas.setAttribute('aria-label', t('flameAria'));
+  renderHeader(); renderStats(); renderTimeline(); renderLegend(); renderTable(); renderNotes();
+  refreshFlame(true);
+}
+document.querySelector('.lang').addEventListener('click', function (ev) {
+  var b = ev.target.closest('button');
+  if (!b) return;
+  lang = b.dataset.lang;
+  try { localStorage.setItem('wattflame-lang', lang); } catch (e) { /* private window */ }
+  applyLanguage();
+});
+
+// ---------------------------------------------------------------- boot
+readPalette();
+computePowerSpan();
+computeFuncStats();
+applyLanguage();
+
+var resizeTimer = 0;
+new ResizeObserver(function () {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(function () { layout(); draw(); renderTimeline(); }, 60);
+}).observe(document.getElementById('flame-wrap'));
+if (window.matchMedia) {
+  var mq = window.matchMedia('(prefers-color-scheme: dark)');
+  var onScheme = function () { readPalette(); renderTimeline(); renderLegend(); draw(); };
+  if (mq.addEventListener) mq.addEventListener('change', onScheme); else if (mq.addListener) mq.addListener(onScheme);
+}
+})();
+</script>
+</body>
+</html>
