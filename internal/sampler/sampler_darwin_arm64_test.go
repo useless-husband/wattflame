@@ -255,6 +255,7 @@ func TestForkedChildIsProfiled(t *testing.T) {
 	if _, ok := res.byLeaf["hot_a"]; !ok {
 		t.Errorf("no samples from the parent: %v", keys(res.byLeaf))
 	}
+	checkConservation(t, res, 0.97, 1.03)
 }
 
 func TestCloseKillsARunningProgram(t *testing.T) {
@@ -468,6 +469,34 @@ func TestExecDoesNotCountTwice(t *testing.T) {
 		t.Errorf("second image not sampled: %v", keys(res.byLeaf))
 	}
 	checkConservation(t, res, 0.97, 1.03)
+}
+
+// The way build tools start their helpers: fork, do a little, exec. Each
+// child is announced twice (once by the fork, once by the new image), and may
+// in between be picked up by pid alone. However those events interleave, no
+// energy may be counted twice.
+func TestForkExecChainsAddUp(t *testing.T) {
+	res := record(t, 30*time.Second, "forkexec", "30")
+	if len(res.targets) < 31 {
+		t.Errorf("%d entries for a parent and 30 children", len(res.targets))
+	}
+	if _, ok := res.byLeaf["hot_child"]; !ok {
+		t.Errorf("forked children not sampled before exec: %v", keys(res.byLeaf))
+	}
+	if !hasStack(res, "hot_b", "worker") {
+		t.Errorf("exec'd images not sampled: %v", keys(res.byLeaf))
+	}
+	// 30 x (10 ms before exec + two threads for 30 ms after).
+	if res.cpu < 1500e6 || res.cpu > 2700e6 {
+		t.Errorf("attributed CPU time = %.0f ms, want about 2100", float64(res.cpu)/1e6)
+	}
+	checkConservation(t, res, 0.97, 1.03)
+
+	// The same with children that do nothing but start up and exit: now
+	// almost all the energy sits right around the fork and the exec, where
+	// the bookkeeping changes hands.
+	res = record(t, 30*time.Second, "forkexec", "150", "noop")
+	checkConservation(t, res, 0.93, 1.05)
 }
 
 // A few hundred very short processes: every one that announces itself must be

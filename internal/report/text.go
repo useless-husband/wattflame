@@ -95,9 +95,12 @@ func Summary(w io.Writer, p *profile.Profile, top int) error {
 		}
 		fmt.Fprintln(w, line)
 	}
-	if tree := p.Meta.TreeCPUNs; tree > 0 && (len(p.Meta.Processes) > 1 || cpu < tree*99/100) {
+	if tree := p.Meta.TreeCPUNs; tree > 0 && cpu < tree*97/100 {
 		// Processes too short-lived to be noticed, and ones owned by another
-		// user, are in the kernel's figure for the whole tree but not here.
+		// user, are in the kernel's figure for the whole tree but not in
+		// the recording. Worth a line only when the gap is real: the two
+		// figures come from different kernel accounts and differ by a few
+		// percent either way on their own.
 		fmt.Fprintf(w, "  Seen       %s of the %s of CPU time the command and its children used\n", Percent(cpu, tree), Duration(tree))
 	}
 	if s := p.Meta.Sampler; s.Ticks > 0 {
