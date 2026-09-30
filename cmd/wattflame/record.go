@@ -95,6 +95,15 @@ func cmdRecord(args []string, stdout, stderr io.Writer) int {
 		targets = ts
 	}
 	syncTargets()
+	// A process can appear between a look at the target list and the drain
+	// that follows it. Its name and path must be known before its first
+	// record is folded in, or its own code is taken for a library's.
+	add := func(r *sampler.Record) {
+		if int(r.Target) >= len(targets) {
+			syncTargets()
+		}
+		b.Add(r)
+	}
 
 	started := time.Now()
 	interval := time.Second / time.Duration(hz)
@@ -125,7 +134,7 @@ loop:
 		select {
 		case <-ticker.C:
 			syncTargets()
-			sess.Drain(b.Add)
+			sess.Drain(add)
 			sess.Reap()
 			if exited, _ := sess.RootExited(); exited {
 				break loop
@@ -154,7 +163,7 @@ loop:
 
 	sess.Stop()
 	syncTargets()
-	sess.Drain(b.Add)
+	sess.Drain(add)
 	syncTargets()
 
 	exited, status := sess.RootExited()
