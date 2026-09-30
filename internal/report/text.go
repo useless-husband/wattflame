@@ -89,6 +89,9 @@ func Summary(w io.Writer, p *profile.Profile, top int) error {
 			hz = 1000000 / p.Meta.IntervalUs
 		}
 		line := fmt.Sprintf("  Profiler   %s of its own (%s on top), %d Hz", Energy(s.SelfEnergyNJ), Percent(s.SelfEnergyNJ, energy), hz)
+		if s.Samples > 0 {
+			line += fmt.Sprintf(", %s pause per stack", Duration(s.SuspendNs/s.Samples))
+		}
 		if s.Overruns > 0 {
 			line += fmt.Sprintf(", %d of %d ticks late", s.Overruns, s.Ticks+s.Overruns)
 		}

@@ -58,15 +58,16 @@ func TestWattsAndPercent(t *testing.T) {
 	}
 	type pc struct{ part, whole uint64 }
 	percents := map[pc]string{
-		{0, 100}:        "0%",
-		{1, 0}:          "–",
-		{1, 10000}:      "<0.1%",
-		{371, 1000}:     "37.1%",
-		{100, 100}:      "100.0%",
-		{9997, 10000}:   "99.97%", // close to all of it: show that it is not quite
-		{10074, 10000}:  "100.7%",
-		{10001, 10000}:  "100.01%",
-		{99900, 100000}: "99.9%",
+		{0, 100}:          "0%",
+		{1, 0}:            "–",
+		{1, 10000}:        "<0.1%",
+		{371, 1000}:       "37.1%",
+		{100, 100}:        "100.0%",
+		{9997, 10000}:     "99.97%", // close to all of it: show that it is not quite
+		{10074, 10000}:    "100.7%",
+		{10001, 10000}:    "100.01%",
+		{99900, 100000}:   "99.9%",
+		{999999, 1000000}: ">99.99%",
 	}
 	for in, want := range percents {
 		if got := Percent(in.part, in.whole); got != want {
@@ -147,7 +148,8 @@ func makeProfile(command string, specs []spec) *profile.Profile {
 		Exit:       "exit 0",
 		Machine:    profile.Machine{Chip: "Apple M5", OS: "macOS 27.0"},
 		Processes:  []profile.Process{{PID: 42, Name: "app", KernelEnergyNJ: energy + energy/100, ThreadsEnergyNJ: energy}},
-		Sampler:    profile.SamplerStats{Ticks: 2000, Overruns: 3, Samples: uint64(len(specs)), SelfEnergyNJ: energy / 50},
+		Sampler: profile.SamplerStats{Ticks: 2000, Overruns: 3, Samples: uint64(len(specs)),
+			SuspendNs: uint64(len(specs)) * 9000, SelfEnergyNJ: energy / 50},
 	}, []profile.Level{{Name: "Super", Cores: 4}, {Name: "Efficiency", Cores: 6}})
 }
 
@@ -181,7 +183,7 @@ func TestSummary(t *testing.T) {
 		"5.00 W average over 2.00 s",
 		"Super 9.00 J (90.0%) · Efficiency 1.00 J (10.0%)",
 		"Accounted  99.0% of what the kernel billed",
-		"200 mJ of its own (2.0% on top), 1000 Hz, 3 of 2003 ticks late",
+		"200 mJ of its own (2.0% on top), 1000 Hz, 9.00 µs pause per stack, 3 of 2003 ticks late",
 		"… and 1 more function\n",
 	} {
 		if !strings.Contains(out, want) {
