@@ -259,8 +259,30 @@ func TestSummaryOfEmptyProfile(t *testing.T) {
 	if err := Summary(&buf, p, 10); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(buf.String(), "No energy was recorded") {
+	if !strings.Contains(buf.String(), "Nothing was recorded") {
 		t.Errorf("got:\n%s", buf.String())
+	}
+}
+
+// A recording from a machine without energy counters has stacks and CPU time.
+// The summary must still be a usable profile.
+func TestSummaryWithoutEnergyFallsBackToCPUTime(t *testing.T) {
+	p := makeProfile("./app", []spec{
+		{0, 300_000_000, 0, []uint64{fParse + 8, fMain + 16}},
+		{0, 100_000_000, 0, []uint64{fHash + 8, fMain + 16}},
+	})
+	var buf bytes.Buffer
+	if err := Summary(&buf, p, 5); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	for _, want := range []string{"reports no per-thread energy", "CPU time profile", "300 ms", "75.0%", "parse", "hash<a&b>"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("summary lacks %q:\n%s", want, out)
+		}
+	}
+	if strings.Index(out, "parse") > strings.Index(out, "hash<a&b>") {
+		t.Errorf("functions are not ordered by CPU time:\n%s", out)
 	}
 }
 

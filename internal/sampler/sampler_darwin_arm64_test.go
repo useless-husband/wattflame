@@ -418,6 +418,29 @@ func TestAttachNeedsRoot(t *testing.T) {
 	}
 }
 
+// On a machine whose kernel has no per-thread energy counters (every virtual
+// machine, including hosted CI runners) the recording must degrade to a time
+// profile, not to nothing. WATTFLAME_NO_COUNTERS forces that path here.
+func TestWithoutEnergyCountersStacksAndTimeRemain(t *testing.T) {
+	t.Setenv("WATTFLAME_NO_COUNTERS", "1")
+	res := record(t, 10*time.Second, "spin", "0.5")
+	if !res.stats.NoCounters {
+		t.Fatal("the fallback was not taken")
+	}
+	if res.energy != 0 {
+		t.Errorf("energy = %d nJ without counters", res.energy)
+	}
+	if res.cpu < 600e6 || res.cpu > 1400e6 {
+		t.Errorf("attributed CPU time = %.0f ms, want about 1000", float64(res.cpu)/1e6)
+	}
+	if !hasStack(res, "hot_a", "main") || !hasStack(res, "hot_b", "worker") {
+		t.Errorf("stacks missing: %v", keys2(res.stacks))
+	}
+	if res.records < 200 {
+		t.Errorf("only %d records", res.records)
+	}
+}
+
 // Regression tests for defects found in review.
 
 // Energy must add up. What the records carry, including the part that could

@@ -174,7 +174,11 @@ int main(int argc, char **argv) {
 	if (strcmp(argv[1], "setuid") == 0) {
 		pid_t pid;
 		char *top_argv[] = {"top", "-l", "1", "-n", "0", NULL};
-		int ok = posix_spawn(&pid, "/usr/bin/top", NULL, NULL, top_argv, environ) == 0;
+		posix_spawn_file_actions_t quiet;
+		posix_spawn_file_actions_init(&quiet);
+		posix_spawn_file_actions_addopen(&quiet, 1, "/dev/null", O_WRONLY, 0);
+		int ok = posix_spawn(&pid, "/usr/bin/top", &quiet, NULL, top_argv, environ) == 0;
+		posix_spawn_file_actions_destroy(&quiet);
 		volatile double r = hot_a(seconds);
 		(void)r;
 		if (ok) {

@@ -113,6 +113,7 @@ struct wf_session {
 	uint32_t opaque_flush_ticks;
 	uint64_t start_wall_us;
 	int is_root;
+	int no_counters; // the kernel has no per-thread energy here; CPU time only
 	mach_timebase_info_data_t tb;
 	uint64_t t0;
 	uint64_t page_size;

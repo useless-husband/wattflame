@@ -22,9 +22,10 @@ jobs:
       - name: vet
         run: go vet ./...
       - name: test
-        # Hosted runners are virtual machines and report no per-thread
-        # energy. The sampler tests still check stacks, symbols, CPU time and
-        # process tracking there, and skip the energy assertions with a note.
+        # Hosted runners are virtual machines without per-thread energy
+        # counters. wattflame falls back to a CPU time profile there; the
+        # tests still check stacks, symbols, CPU time and process tracking,
+        # and skip the energy assertions with a note.
         run: go test -race -count=1 -v ./...
       - name: examples
         run: make -C examples
@@ -33,7 +34,7 @@ jobs:
           ./wattflame version
           ./wattflame record -o smoke.json -- examples/bin/cores 1
           ./wattflame report smoke.json
-          ./wattflame report -folded - smoke.json | grep -q crunch
+          ./wattflame report -folded - -metric cpu smoke.json | grep -q crunch
           ./wattflame diff smoke.json smoke.json
           test -s smoke.html
 

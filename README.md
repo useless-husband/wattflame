@@ -146,7 +146,7 @@ The profiler's own energy is measured the same way as the target's, from its sam
 - **No JIT symbolication**, no kernel stacks, and inlined functions are reported under their caller.
 - **Attach mode (`-p`) has not been tested by me**: it needs root, which I did not have while developing. Launch mode is what the tests cover.
 - The per-thread energy interface is private kernel API (`PROC_PIDTHREADCOUNTS`), as is CoreSymbolication. Both have been stable since macOS 13 and are loaded defensively, but Apple can change them.
-- Where the kernel reports no per-thread energy, wattflame still records stacks and CPU time and energy reads zero. I expect virtual machines, such as hosted CI runners, to be such a case but have not confirmed it; the tests skip their energy assertions there.
+- **Virtual machines have no per-thread energy counters** (GitHub's hosted macOS runners are one such case). wattflame then records an ordinary CPU time profile and says so; the tests skip their energy assertions there.
 
 ## Related work
 

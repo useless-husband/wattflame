@@ -75,7 +75,7 @@ func Summary(w io.Writer, p *profile.Profile, top int) error {
 	fmt.Fprintf(tw, "  CPU time\t%s\t%s while on a core\n", Duration(cpu), Watts(total.Watts()))
 	tw.Flush()
 
-	if len(p.Levels) > 1 {
+	if len(p.Levels) > 1 && energy > 0 {
 		parts := make([]string, 0, len(p.Levels))
 		for l, lv := range p.Levels {
 			parts = append(parts, fmt.Sprintf("%s %s (%s)", lv.Name, Energy(total.EnergyNJ[l]), Percent(total.EnergyNJ[l], energy)))
@@ -125,14 +125,37 @@ func Summary(w io.Writer, p *profile.Profile, top int) error {
 	}
 	fmt.Fprintln(w)
 
+	all := p.Functions()
 	if energy == 0 {
-		fmt.Fprintln(w, "  No energy was recorded. The program may have exited before the first sample,")
-		fmt.Fprintln(w, "  or the kernel on this machine does not report per-thread energy.")
+		if cpu == 0 {
+			fmt.Fprintln(w, "  Nothing was recorded. The program may have exited before the first sample.")
+			fmt.Fprintln(w)
+			return nil
+		}
+		// No energy, but stacks and CPU time: a time profile is still worth
+		// showing.
+		fmt.Fprintln(w, "  The kernel on this machine reports no per-thread energy (virtual machines do")
+		fmt.Fprintln(w, "  not have the counters), so this is a CPU time profile.")
+		fmt.Fprintln(w)
+		funcs := all
+		if top > 0 && len(funcs) > top {
+			funcs = funcs[:top]
+		}
+		tw = tabwriter.NewWriter(w, 0, 0, 2, ' ', tabwriter.AlignRight)
+		fmt.Fprintf(tw, "  SELF\t\tTOTAL\t  FUNCTION\n")
+		for _, f := range funcs {
+			fr := &p.Frames[f.Frame]
+			name := truncate(fr.Name, 70)
+			if fr.Module != "" && !strings.HasPrefix(fr.Name, "[") {
+				name += "  " + fr.Module
+			}
+			fmt.Fprintf(tw, "  %s\t%s\t%s\t  %s\n", Duration(f.Self.CPU()), Percent(f.Self.CPU(), cpu), Percent(f.Total.CPU(), cpu), name)
+		}
+		tw.Flush()
 		fmt.Fprintln(w)
 		return nil
 	}
 
-	all := p.Functions()
 	funcs := all
 	if top > 0 && len(funcs) > top {
 		funcs = funcs[:top]

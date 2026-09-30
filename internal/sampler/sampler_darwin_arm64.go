@@ -222,6 +222,7 @@ func (s *Session) Stats() Stats {
 		ElapsedNs:    uint64(st.elapsed_ns),
 		Dropped:      uint64(st.dropped),
 		TargetsLost:  uint64(st.targets_lost),
+		NoCounters:   st.no_counters != 0,
 		Targets:      int(st.targets),
 		Levels:       int(st.nlevels),
 	}
