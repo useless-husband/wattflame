@@ -713,6 +713,10 @@ static void sweep_threads(wf_session *s, wf_target *t, uint64_t now_ns) {
 		t->nth--;
 	}
 	t->listed = 1;
+	// The baseline inherited across exec has done its job. Keeping it would
+	// apply it a second time if this entry is later listed afresh (when an
+	// entry counted by pid becomes one that can be sampled).
+	t->carry_in.n = 0;
 }
 
 // Where a newly found thread's counters start. A thread that existed before
@@ -1011,6 +1015,10 @@ static void book_startup(wf_session *s, wf_target *t, uint64_t now_ns) {
 			flush_thread_as(s, t, &t->th[i], now_ns, WF_F_STARTUP);
 		}
 	}
+	// Keep the process total in step with the thread counters just read. A
+	// process may be gone before the next tick, and what it hands on across
+	// exec must describe one and the same moment.
+	note_process_energy(t);
 }
 
 // Register a task whose port we now hold. Takes ownership of the task send

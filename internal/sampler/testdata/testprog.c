@@ -7,6 +7,8 @@
 //   testprog system <seconds>              run `sleep <seconds>` through /bin/sh while spinning
 //   testprog noop x                        exit at once
 //   testprog spawnmany <n>                 run `testprog noop x` n times, one after another
+//   testprog forkexec <n> [noop]           fork, spin briefly, exec `testprog spin 0.03` (or
+//                                          `testprog noop x`); n times
 //   testprog threads <n>                   n threads in a row, each busy for about 4 ms
 //   testprog execchain <seconds>           hot_a, then exec into `testprog spin <seconds>`
 //   testprog setuid <seconds>              run the setuid-root /usr/bin/top once while spinning
@@ -132,6 +134,25 @@ int main(int argc, char **argv) {
 				int status;
 				waitpid(pid, &status, 0);
 			}
+		}
+		return 0;
+	}
+	if (strcmp(argv[1], "forkexec") == 0) {
+		for (int i = 0; i < atoi(argv[2]); i++) {
+			pid_t pid = fork();
+			if (pid == 0) {
+				if (argc > 3) {
+					// Nothing but process startup on either side of exec.
+					execl(argv[0], argv[0], "noop", "x", (char *)NULL);
+					_exit(127);
+				}
+				volatile double r = hot_child(0.01);
+				(void)r;
+				execl(argv[0], argv[0], "spin", "0.03", (char *)NULL);
+				_exit(127);
+			}
+			int status;
+			waitpid(pid, &status, 0);
 		}
 		return 0;
 	}
