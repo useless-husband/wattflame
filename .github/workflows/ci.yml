@@ -53,6 +53,8 @@ jobs:
           ./wattflame version
           if ./wattflame record -- true 2> err.txt; then exit 1; fi
           grep -q "Apple Silicon" err.txt
+      - name: it also compiles for Windows
+        run: GOOS=windows go vet ./...
 
   lint:
     runs-on: macos-latest

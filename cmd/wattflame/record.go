@@ -177,12 +177,12 @@ loop:
 	}
 	exitCode := 0
 	switch {
-	case exited && pid == 0 && status.Signaled():
-		meta.Exit = "killed by " + status.Signal().String()
-		exitCode = 128 + int(status.Signal())
+	case exited && pid == 0 && status.Signal != "":
+		meta.Exit = "killed by " + status.Signal
+		exitCode = 128 + status.SignalNum
 	case exited && pid == 0:
-		meta.Exit = fmt.Sprintf("exit %d", status.ExitStatus())
-		exitCode = status.ExitStatus()
+		meta.Exit = fmt.Sprintf("exit %d", status.Code)
+		exitCode = status.Code
 	case exited:
 		meta.Exit = "process exited"
 	default:

@@ -5,7 +5,6 @@ package sampler
 import (
 	"errors"
 	"os"
-	"syscall"
 	"time"
 )
 
@@ -32,7 +31,7 @@ func Attach(pid int) (*Session, error) { return nil, errUnsupported }
 func (s *Session) Start(interval time.Duration, maxDepth int) error { return errUnsupported }
 func (s *Session) Stop()                                            {}
 func (s *Session) Drain(fn func(*Record)) int                       { return 0 }
-func (s *Session) RootExited() (bool, syscall.WaitStatus)           { return true, 0 }
+func (s *Session) RootExited() (bool, ExitStatus)                   { return true, ExitStatus{} }
 func (s *Session) RootPID() int                                     { return 0 }
 func (s *Session) Signal(sig os.Signal)                             {}
 func (s *Session) Stats() Stats                                     { return Stats{} }
