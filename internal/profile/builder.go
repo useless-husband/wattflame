@@ -14,7 +14,7 @@ import (
 // implements it; tests supply a fake.
 type Symbolizer interface {
 	Symbolicate(target uint32, addr uint64) sampler.Symbol
-	ThreadName(pid int, tid uint64) string
+	ThreadName(target uint32, tid uint64) string
 }
 
 // Names of the synthetic frames.
@@ -86,7 +86,6 @@ type Builder struct {
 
 	procNode   map[uint32]int32
 	threadNode map[threadKey]int32
-	threadPID  map[threadKey]int
 	sampled    map[uint32]bool    // targets with at least one real stack
 	unsampled  map[uint32][]int32 // per target, its "[no stacks]" nodes from opaque records
 	procNames  map[uint32]string
@@ -108,7 +107,6 @@ func NewBuilder(sym Symbolizer) *Builder {
 		lines:      make(map[int32]map[uint32]uint64),
 		procNode:   make(map[uint32]int32),
 		threadNode: make(map[threadKey]int32),
-		threadPID:  make(map[threadKey]int),
 		sampled:    make(map[uint32]bool),
 		unsampled:  make(map[uint32][]int32),
 		procNames:  make(map[uint32]string),
@@ -230,12 +228,11 @@ func (b *Builder) threadNodeFor(r *sampler.Record) int32 {
 	if n, ok := b.threadNode[k]; ok {
 		return n
 	}
-	name := b.sym.ThreadName(r.PID, r.TID)
+	name := b.sym.ThreadName(r.Target, r.TID)
 	f := b.frame(frameKey{kind: KindThread, target: r.Target, id: r.TID},
 		Frame{Kind: KindThread, Name: name, PID: r.PID, TID: r.TID})
 	n := b.child(b.processNode(r), f)
 	b.threadNode[k] = n
-	b.threadPID[k] = r.PID
 	return n
 }
 
@@ -383,7 +380,7 @@ func (b *Builder) Finish(meta Meta, levels []Level) *Profile {
 	for k, n := range b.threadNode {
 		fr := &b.frames[b.nodes[n].Frame]
 		if fr.Name == "" {
-			fr.Name = b.sym.ThreadName(b.threadPID[k], k.tid)
+			fr.Name = b.sym.ThreadName(k.target, k.tid)
 		}
 		if fr.Name == "" {
 			if firstTID[k.target] == k.tid {

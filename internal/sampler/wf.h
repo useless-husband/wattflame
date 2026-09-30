@@ -139,8 +139,9 @@ int wf_get_target(wf_session *s, uint32_t target, wf_target_info *out);
 // Resolve an address in a target. Returns 1 if a symbol was found.
 int wf_symbolicate(wf_session *s, uint32_t target, uint64_t addr, wf_symbol *out);
 
-// Thread name for a tid, or empty string.
-void wf_thread_name(int32_t pid, uint64_t tid, char *out, size_t outlen);
+// The name a thread of a target gave itself, or the empty string. Names are
+// collected while the thread lives and remembered after it has ended.
+void wf_thread_name(wf_session *s, uint32_t target, uint64_t tid, char *out, size_t outlen);
 
 // Number of performance levels and their sysctl names ("Performance", ...).
 int wf_perf_levels(char names[WF_MAX_LEVELS][32]);

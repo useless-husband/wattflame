@@ -491,6 +491,36 @@ static int thread_is_running(thread_act_t port) {
 	return info.run_state == TH_STATE_RUNNING;
 }
 
+// Ask the kernel what a thread calls itself. Threads usually name themselves
+// a moment after they start, so an empty answer is asked again later.
+static void fetch_name(pid_t pid, wf_thread *th) {
+	struct proc_threadinfo info;
+	if (proc_pidinfo(pid, PROC_PIDTHREADID64INFO, th->tid, &info, sizeof(info)) >=
+	    (int)sizeof(info)) {
+		info.pth_name[sizeof(info.pth_name) - 1] = '\0';
+		strlcpy(th->name, info.pth_name, sizeof(th->name));
+	}
+}
+
+// Keep the name of a thread that is about to be forgotten.
+static void keep_name(wf_target *t, const wf_thread *th) {
+	if (th->name[0] == '\0') {
+		return;
+	}
+	if (t->nnames == t->capnames) {
+		int cap = t->capnames ? t->capnames * 2 : 16;
+		wf_name *p = realloc(t->names, (size_t)cap * sizeof(wf_name));
+		if (p == NULL) {
+			return;
+		}
+		t->names = p;
+		t->capnames = cap;
+	}
+	t->names[t->nnames].tid = th->tid;
+	strlcpy(t->names[t->nnames].name, th->name, sizeof(t->names[0].name));
+	t->nnames++;
+}
+
 static void release_thread(wf_thread *th) {
 	if (th->port != MACH_PORT_NULL) {
 		mach_port_deallocate(mach_task_self(), th->port);
@@ -669,6 +699,7 @@ static void settle(wf_session *s, wf_target *t, uint64_t now_ns, int final) {
 static void drop_threads(wf_session *s, wf_target *t, uint64_t now_ns) {
 	for (int i = 0; i < t->nth; i++) {
 		thread_gone(s, t, &t->th[i], now_ns);
+		keep_name(t, &t->th[i]);
 		release_thread(&t->th[i]);
 	}
 	t->nth = 0;
@@ -726,6 +757,7 @@ static void sweep_threads(wf_session *s, wf_target *t, uint64_t now_ns) {
 			continue;
 		}
 		thread_gone(s, t, &t->th[i], now_ns);
+		keep_name(t, &t->th[i]);
 		release_thread(&t->th[i]);
 		t->th[i] = t->th[t->nth - 1];
 		t->nth--;
@@ -922,6 +954,9 @@ static void tick_thread(wf_session *s, wf_target *t, wf_thread *th, uint64_t now
 		// refresh removes it.
 		thread_gone(s, t, th, now_ns);
 		return;
+	}
+	if (th->name[0] == '\0' && (th->name_age++ & 15) == 0) {
+		fetch_name(t->pid, th);
 	}
 
 	if (t->opaque) {
@@ -1769,17 +1804,30 @@ int wf_get_target(wf_session *s, uint32_t target, wf_target_info *out) {
 	return 1;
 }
 
-void wf_thread_name(int32_t pid, uint64_t tid, char *out, size_t outlen) {
+void wf_thread_name(wf_session *s, uint32_t target, uint64_t tid, char *out, size_t outlen) {
 	if (outlen == 0) {
 		return;
 	}
 	out[0] = '\0';
-	struct proc_threadinfo info;
-	int r = proc_pidinfo(pid, PROC_PIDTHREADID64INFO, tid, &info, sizeof(info));
-	if (r >= (int)sizeof(info)) {
-		info.pth_name[sizeof(info.pth_name) - 1] = '\0';
-		strlcpy(out, info.pth_name, outlen);
+	pthread_mutex_lock(&s->mu);
+	if (target < (uint32_t)s->ntargets) {
+		wf_target *t = s->targets[target];
+		for (int i = 0; i < t->nth; i++) {
+			if (t->th[i].tid == tid) {
+				if (t->th[i].name[0] == '\0') {
+					fetch_name(t->pid, &t->th[i]);
+				}
+				strlcpy(out, t->th[i].name, outlen);
+				break;
+			}
+		}
+		for (int i = t->nnames - 1; i >= 0 && out[0] == '\0'; i--) {
+			if (t->names[i].tid == tid) {
+				strlcpy(out, t->names[i].name, outlen);
+			}
+		}
 	}
+	pthread_mutex_unlock(&s->mu);
 }
 
 void wf_free(wf_session *s) {
@@ -1817,6 +1865,7 @@ void wf_free(wf_session *s) {
 			release_thread(&t->th[j]);
 		}
 		free(t->th);
+		free(t->names);
 		free(t->orph);
 		wf_cs_release(t->symbolicator);
 		if (t->task != MACH_PORT_NULL) {

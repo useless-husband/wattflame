@@ -27,7 +27,7 @@ func (f *fakeSym) Symbolicate(target uint32, addr uint64) sampler.Symbol {
 	return sampler.Symbol{}
 }
 
-func (f *fakeSym) ThreadName(pid int, tid uint64) string { return f.threads[tid] }
+func (f *fakeSym) ThreadName(target uint32, tid uint64) string { return f.threads[tid] }
 
 const (
 	aStart  = 0x1000 // start (app)

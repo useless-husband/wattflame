@@ -39,5 +39,5 @@ func (s *Session) Signal(sig os.Signal)                             {}
 func (s *Session) Stats() Stats                                     { return Stats{} }
 func (s *Session) Targets() []TargetInfo                            { return nil }
 func (s *Session) Symbolicate(target uint32, addr uint64) Symbol    { return Symbol{} }
-func (s *Session) ThreadName(pid int, tid uint64) string            { return "" }
+func (s *Session) ThreadName(target uint32, tid uint64) string      { return "" }
 func (s *Session) Close()                                           {}
