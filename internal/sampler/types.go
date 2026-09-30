@@ -66,6 +66,7 @@ type Stats struct {
 	ElapsedNs    uint64
 	Dropped      uint64
 	TargetsLost  uint64 // processes that could not be tracked
+	NoCounters   bool   // the kernel reports no per-thread energy on this machine
 	Targets      int
 	Levels       int
 }

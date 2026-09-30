@@ -229,6 +229,7 @@ var STR = {
     sEnergy: 'Energy', sPower: 'Average power', sCPU: 'CPU time', sDuration: 'Duration',
     sAccounted: 'Accounted for', sAccountedSub: 'of what the kernel billed the process',
     sAccountedThreads: '({0} read thread by thread)',
+    sNoEnergy: 'this machine reports no per-thread energy; widths show CPU time',
     sPowerSub: '{0} while on a core', sCPUSub: '{0} of the run',
     total: 'Total', self: 'Self', ofAll: 'of all energy', power: 'Power', onCore: 'while on a core',
     samples: 'stacks', hotLines: 'Hottest lines', line: 'line',
@@ -262,6 +263,7 @@ var STR = {
     sEnergy: '能量', sPower: '平均功率', sCPU: 'CPU 時間', sDuration: '執行時間',
     sAccounted: '涵蓋比例', sAccountedSub: '對照核心記在這支程式名下的總能量',
     sAccountedThreads: '（其中 {0} 是逐一讀取執行緒得到的）',
+    sNoEnergy: '這台機器沒有回報執行緒能量；寬度顯示的是 CPU 時間',
     sPowerSub: '在核心上執行時 {0}', sCPUSub: '執行時間的 {0}',
     total: '合計', self: '自身', ofAll: '佔全部能量', power: '功率', onCore: '在核心上執行時',
     samples: '個取樣', hotLines: '最耗電的行', line: '第',
@@ -464,6 +466,9 @@ function buildView(merge) {
 var state = { metric: 'energy', color: 'origin', merge: true, zoom: 0, query: '', hover: -1, focus: -1 };
 var V = buildView(true);
 var totalE = V.incE[0], totalT = V.incT[0];
+// A profile recorded where the kernel reports no energy still has stacks and
+// CPU time; show those instead of an empty page.
+if (!(totalE > 0) && totalT > 0) state.metric = 'cpu';
 var avgW = totalT > 0 ? totalE / totalT : 0;
 var matchFrame = null;
 
@@ -504,7 +509,7 @@ function renderStats() {
     box.appendChild(s);
   }
   var dur = m.durationNs || 0;
-  stat(t('sEnergy'), fmtE(totalE), '', true);
+  stat(t('sEnergy'), fmtE(totalE), totalE > 0 || !(totalT > 0) ? '' : t('sNoEnergy'), true);
   stat(t('sPower'), fmtW(dur > 0 ? totalE / dur : 0), t('sPowerSub', fmtW(avgW)));
   stat(t('sCPU'), fmtT(totalT), dur > 0 ? t('sCPUSub', (100 * totalT / dur).toFixed(0) + '%') : '');
   stat(t('sDuration'), fmtT(dur), '');
@@ -985,7 +990,7 @@ if (nThreads <= 1 && nProc <= 1) document.getElementById('grp-threads').hidden =
 if (nProc > 1) document.querySelector('#grp-threads label').dataset.i18n = 'procsThreads';
 
 // ---------------------------------------------------------------- table
-var tableState = { sort: 'self', desc: true, all: false };
+var tableState = { sort: totalE > 0 ? 'self' : 'cpu', desc: true, all: false };
 var funcStats = null;
 function computeFuncStats() {
   var M = buildView(true);

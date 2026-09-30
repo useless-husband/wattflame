@@ -189,6 +189,7 @@ loop:
 			SelfCPUNs:    stats.SelfCPUNs,
 			Dropped:      stats.Dropped,
 			TargetsLost:  stats.TargetsLost,
+			NoCounters:   stats.NoCounters,
 		},
 	}
 	exitCode := 0

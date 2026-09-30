@@ -148,6 +148,19 @@ static uint32_t ticks_for(const wf_session *s, uint64_t ns) {
 
 static int read_counts(const wf_session *s, pid_t pid, uint64_t tid,
                        uint64_t out[WF_W_COUNT][WF_MAX_LEVELS]) {
+	if (s->no_counters) {
+		// Virtual machines have no energy counters and refuse the call
+		// below. CPU time is still available the ordinary way, which keeps
+		// the stacks and the time profile working there.
+		struct proc_threadinfo info;
+		if (proc_pidinfo(pid, PROC_PIDTHREADID64INFO, tid, &info, sizeof(info)) <
+		    (int)sizeof(info)) {
+			return 0;
+		}
+		memset(out, 0, sizeof(uint64_t) * WF_W_COUNT * WF_MAX_LEVELS);
+		out[WF_W_CPU_NS][0] = info.pth_user_time + info.pth_system_time;
+		return 1;
+	}
 	struct wf_ptc c;
 	int r = proc_pidinfo(pid, WF_PROC_PIDTHREADCOUNTS, tid, &c, sizeof(c));
 	if (r < (int)offsetof(struct wf_ptc, counts)) {
@@ -180,8 +193,13 @@ static int process_energy(pid_t pid, uint64_t *energy, uint64_t *penergy) {
 
 // Read the kernel's process totals and remember how much thread energy had
 // been seen at that same moment, so the two can be compared like for like.
-static void note_process_energy(wf_target *t) {
+static void note_process_energy(const wf_session *s, wf_target *t) {
 	uint64_t e = 0, pe = 0;
+	if (s->no_counters) {
+		// Without per-thread energy there is nothing to set a process
+		// total against.
+		return;
+	}
 	if (!process_energy(t->pid, &e, &pe) || e < t->energy_last) {
 		return;
 	}
@@ -665,7 +683,7 @@ static void target_died(wf_session *s, wf_target *t, uint64_t now_ns, int exec) 
 	if (!exec) {
 		// One more look at the totals. For our own child this still works
 		// after it has exited, as long as it has not been reaped.
-		note_process_energy(t);
+		note_process_energy(s, t);
 	}
 	wf_carry *c = &t->carry_out;
 	c->n = 0;
@@ -892,6 +910,12 @@ static int accumulate(wf_session *s, wf_target *t, wf_thread *th) {
 	return 1;
 }
 
+// Whether the thread has something waiting to be attributed. Normally that is
+// energy; where the kernel reports none, CPU time takes its place.
+static int owes(const wf_session *s, const wf_thread *th) {
+	return th->acc_energy > 0 || (s->no_counters && th->acc[WF_W_CPU_NS][0] > 0);
+}
+
 static void tick_thread(wf_session *s, wf_target *t, wf_thread *th, uint64_t now_ns) {
 	if (!accumulate(s, t, th)) {
 		// The thread is gone. It stays in the list, idle, until the next
@@ -902,7 +926,7 @@ static void tick_thread(wf_session *s, wf_target *t, wf_thread *th, uint64_t now
 
 	if (t->opaque) {
 		// No stacks to wait for; just keep the record count down.
-		if (th->acc_energy > 0 && ++th->deferred >= s->opaque_flush_ticks) {
+		if (owes(s, th) && ++th->deferred >= s->opaque_flush_ticks) {
 			flush_thread(s, t, th, now_ns);
 		}
 		return;
@@ -911,7 +935,7 @@ static void tick_thread(wf_session *s, wf_target *t, wf_thread *th, uint64_t now
 	if (thread_is_running(th->port)) {
 		take_sample(s, t, th, now_ns, 0);
 	}
-	if (th->acc_energy > 0) {
+	if (owes(s, th)) {
 		if (th->npend > 0 || ran_recently(s, th, now_ns)) {
 			// Either fresh stacks are waiting, or the thread stopped right
 			// after its last one and this is the tail of that run.
@@ -969,7 +993,7 @@ static wf_target *new_target(wf_session *s, pid_t pid, task_t task, int from_zer
 		t->penergy_start = carry->penergy;
 	} else {
 		t->from_zero = from_zero;
-		if (!from_zero) {
+		if (!from_zero && !s->no_counters) {
 			process_energy(pid, &t->energy_start, &t->penergy_start);
 		}
 	}
@@ -1018,7 +1042,7 @@ static void book_startup(wf_session *s, wf_target *t, uint64_t now_ns) {
 	// Keep the process total in step with the thread counters just read. A
 	// process may be gone before the next tick, and what it hands on across
 	// exec must describe one and the same moment.
-	note_process_energy(t);
+	note_process_energy(s, t);
 }
 
 // Register a task whose port we now hold. Takes ownership of the task send
@@ -1172,7 +1196,7 @@ static void tick_target(wf_session *s, wf_target *t, uint64_t now_ns) {
 	for (int i = 0; i < t->nth; i++) {
 		tick_thread(s, t, &t->th[i], now_ns);
 	}
-	note_process_energy(t);
+	note_process_energy(s, t);
 	settle(s, t, now_ns, 0);
 }
 
@@ -1277,7 +1301,7 @@ static void *sampler_main(void *arg) {
 			}
 			flush_thread(s, t, th, end_ns);
 		}
-		note_process_energy(t);
+		note_process_energy(s, t);
 		settle(s, t, end_ns, 1);
 	}
 	s->stats.elapsed_ns = end_ns;
@@ -1394,6 +1418,16 @@ wf_session *wf_new(char *err, size_t errlen) {
 	s->page_size = (uint64_t)vm_page_size;
 	s->is_root = geteuid() == 0;
 	s->interval_us = 1000;
+	// Probe the per-thread counters on ourselves. WATTFLAME_NO_COUNTERS
+	// forces the fallback, so that it can be tested on real hardware.
+	uint64_t self_tid = 0;
+	pthread_threadid_np(NULL, &self_tid);
+	struct wf_ptc probe;
+	if (getenv("WATTFLAME_NO_COUNTERS") != NULL ||
+	    proc_pidinfo(getpid(), WF_PROC_PIDTHREADCOUNTS, self_tid, &probe, sizeof(probe)) <
+	        (int)offsetof(struct wf_ptc, counts)) {
+		s->no_counters = 1;
+	}
 	s->chunk = malloc(WF_CHUNK);
 	s->frames = malloc(WF_MAX_DEPTH * sizeof(uint64_t));
 	if (s->chunk == NULL || s->frames == NULL) {
@@ -1700,6 +1734,7 @@ void wf_get_stats(wf_session *s, wf_stats *out) {
 	*out = s->stats;
 	out->targets = (uint32_t)s->ntargets;
 	out->dropped = s->dropped;
+	out->no_counters = (uint32_t)s->no_counters;
 	if (out->elapsed_ns == 0) {
 		out->elapsed_ns = abs_to_ns(s, mach_absolute_time() - s->t0);
 	}

@@ -64,6 +64,8 @@ typedef struct {
 	uint64_t targets_lost; // processes that could not be tracked (out of memory)
 	uint32_t targets;
 	uint32_t nlevels;
+	uint32_t no_counters; // 1 if the kernel reports no per-thread energy here
+	uint32_t reserved;
 } wf_stats;
 
 typedef struct {

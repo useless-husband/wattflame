@@ -221,6 +221,9 @@ type SamplerStats struct {
 	SelfCPUNs    uint64 `json:"selfCPUNs"`
 	Dropped      uint64 `json:"dropped,omitempty"`
 	TargetsLost  uint64 `json:"targetsLost,omitempty"`
+	// NoCounters is set when the kernel reported no per-thread energy (a
+	// virtual machine). The profile then holds stacks and CPU time only.
+	NoCounters bool `json:"noCounters,omitempty"`
 }
 
 // Meta describes how and where a profile was recorded.
@@ -404,16 +407,21 @@ func (p *Profile) Functions() []FuncStat {
 	for _, s := range stats {
 		out = append(out, *s)
 	}
+	// Largest self energy first. A profile without energy (recorded where
+	// the kernel reports none) falls through to CPU time.
 	sort.Slice(out, func(i, j int) bool {
-		ei, ej := out[i].Self.Energy(), out[j].Self.Energy()
-		if ei != ej {
-			return ei > ej
+		a, b := &out[i], &out[j]
+		for _, pair := range [][2]uint64{
+			{a.Self.Energy(), b.Self.Energy()},
+			{a.Total.Energy(), b.Total.Energy()},
+			{a.Self.CPU(), b.Self.CPU()},
+			{a.Total.CPU(), b.Total.CPU()},
+		} {
+			if pair[0] != pair[1] {
+				return pair[0] > pair[1]
+			}
 		}
-		ti, tj := out[i].Total.Energy(), out[j].Total.Energy()
-		if ti != tj {
-			return ti > tj
-		}
-		return p.FrameLabel(out[i].Frame) < p.FrameLabel(out[j].Frame)
+		return p.FrameLabel(a.Frame) < p.FrameLabel(b.Frame)
 	})
 	return out
 }
